@@ -43,12 +43,11 @@ extends RefCounted
 ## 参考：<https://github.com/lxgw/LxgwWenKai>（OFL 1.1）
 ##       <https://github.com/lxgw/LxgwXiHei>（OFL 1.1）
 
-# ═══ 画布基座（与 game_config.gd 的 BASE_SIZE_* 一致，此处只读不写）═══
-
-## 横屏设计基座
-const BASE_LANDSCAPE: Vector2i = Vector2i(1152, 648)
-## 竖屏设计基座（与 iPhone 15 的 393×852pt 几乎同比例）
-const BASE_PORTRAIT: Vector2i = Vector2i(720, 1560)
+# ═══ 画布基座 ═══
+# ⚰️ 2026-11-02 墓碑（名字不许回收）：`BASE_LANDSCAPE` / `BASE_PORTRAIT` 已删除。
+#   它们是 `game_config.gd::BASE_SIZE_LANDSCAPE/PORTRAIT` 的**副本**（那两份才是活的，
+#   `base_canvas_size()` 在读），而这两个从未被任何代码引用 ⇒ 同一件事两份真源。
+#   画布基座请直接读 `GameConfig`。
 
 # ═══════════════════════ 1. 字体 ═══════════════════════
 
@@ -94,46 +93,40 @@ const FS_PORTRAIT: Dictionary = {
 static func fs(level: int, portrait: bool) -> int:
 	var tbl: Dictionary = FS_PORTRAIT if portrait else FS_LANDSCAPE
 	return int(tbl.get(level, int(FS_LANDSCAPE[Level.L4])))
-
-## 该画布下 1 逻辑px 等于多少 pt（判据与文档换算都用它，别再各写一遍除法）。
-static func pt_per_px(portrait: bool) -> float:
-	return 393.0 / float(BASE_PORTRAIT.x) if portrait else 1.0
+# ⚰️ 2026-11-02 墓碑（名字不许回收）：`pt_per_px()` 已删除（全工程零读者，`_audit_gd` ②）。
 
 
 # ═══════════════════════ 2. 间距 ═══════════════════════
 
-## 间距阶梯，基准单位 4。★ 现状里的 40 与 14 都不在常用档上，已在 §4 归位。
-const SPACE_XS: int = 4      # 图标与文字、行内元素（= 现状 LABEL_GAP 4）
-const SPACE_SM: int = 8      # 按钮纵内边距、紧凑控件间（= 现状 8）
-const SPACE_MD: int = 12     # 行内控件间、输入框内边距
-const SPACE_LG: int = 16     # 卡片内边距
-const SPACE_XL: int = 24     # 面板横内边距、区块间（= 现状 24）
-const SPACE_2XL: int = 32    # 区块间、页面边距
-const SPACE_3XL: int = 48    # 页面外边距、大留白
+## 间距阶梯，基准单位 4。
+## ⚰️ 2026-11-02：本阶梯**只接线了 SPACE_LG 一档**（`game_config.gd::hud_margin_portrait`），
+##   其余六档（XS/SM/MD/XL/2XL/3XL）从 2026-10-13 建这一层起就**零代码读者** ⇒ 已删除。
+##   ⇒ 「先立真源 → 再逐个调用点改读 token」这一步在间距上是**没做完**的：现在各调用点
+##     仍是字面量。要真正接线，做法是逐个改读并在同一次改动里删掉那一处的字面量 ——
+##     别把空刻度当"预留"留着（§33 死参数 = 旋钮拧不动）。
+const SPACE_LG: int = 16     # 卡片内边距（★ 唯一有读者的间距档）
 
 # ═══════════════════════ 3. 形状 ═══════════════════════
-
-const RADIUS_SM: int = 4         # 芯片、色块、输入框
-const RADIUS_MD: int = 8         # 按钮、面板（★ = 现状值，保持不动以免全量回归）
-const RADIUS_LG: int = 16        # 卡片、浮层
-const BORDER_HAIRLINE: int = 1   # 默认描边（★ = 现状值）
-const BORDER_STRONG: int = 2     # 选中态、焦点态
+# ⚰️ 2026-11-02 墓碑（名字不许回收）：`RADIUS_SM` / `RADIUS_MD` / `RADIUS_LG` /
+#   `BORDER_HAIRLINE` / `BORDER_STRONG` 已删除 —— 五档从建层起零代码读者。
+#   真实圆角/线宽仍写在各调用点（`game_config.gd` 的 `corner_radius_all(8)` 那一族），
+#   想统一时先改那一处真源，再把 token 建回来（那时它才有读者）。
 
 # ═══════════════════════ 4. 边距归位（2026-10-13 用户口令「任你改」）═══
 
-## 棋盘外边距：横 40 → 32（= SPACE_2XL），竖 14 → 16（= SPACE_LG）。
+## 棋盘外边距：横 40 → 32，竖 14 → 16。
 ## ★ 改的理由不是"整齐"，是**层级**：棋盘边距属于页面级留白，
-##   应当用页面档的 token（32），而不是一个只有它自己在用的 40；
-##   竖屏 14 → 16 是同一套阶梯的下沿，且仍在 `board_margin()` 的既有关系内。
-## ★ 为什么写成字面 32/16 而不是 `float(SPACE_2XL)`：GDScript 的 `const` 初始化必须能
-##   在**编译期**求值，`float(...)` 构造调用不保证被折叠 —— 一旦不折叠就是加载期
-##   解析错误，整个项目起不来。token 阶梯与这两个值同源（16=SPACE_LG、32=SPACE_2XL），
-##   由上面各档的定义可核对。
+##   于是横屏取到 32（页面档），竖屏取 16（= `SPACE_LG`，唯一仍活着的间距档），
+##   而不是一个只有它自己在用的 40。
+## ★ 为什么写成字面 32/16 而不是 `float(UITokens.SPACE_LG)`：GDScript 的 `const` 初始化
+##   必须能在**编译期**求值，`float(...)` 构造调用不保证被折叠 —— 一旦不折叠就是加载期
+##   解析错误，整个项目起不来。（★ 2026-11-02：`SPACE_2XL` 已随死 token 一起删除，
+##   32 从此是字面量，不再有"同源可核对"这层关系。）
 ##
 ## ★ 为什么横竖方向相反不是笔误：竖屏的瓶颈**恒是宽度**（见 `game_config.gd` 的
 ##   `board_margin` 注释），多留 2px 就直接少 2px 可点面积；而 16 与 12 的差距在窄视口
 ##   上可忽略。再收到 12 会让棋盘边缘的瓷砖贴到屏幕边，破坏「棋盘是居中一块」的观感。
-const BOARD_MARGIN_LANDSCAPE: float = 32.0   # = SPACE_2XL；40 → 32
+const BOARD_MARGIN_LANDSCAPE: float = 32.0   # 页面档留白；40 → 32
 const BOARD_MARGIN_PORTRAIT: float = 16.0     # = SPACE_LG；14 → 16
 
 ## HUD 按钮最小高度（竖屏）。76 → 80。

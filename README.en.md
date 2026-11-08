@@ -16,7 +16,7 @@ Single-player vs. AI · Windows · free · MIT. ~57k lines of GDScript (Godot 4.
 
 ## Download & play
 
-Grab `TileGo-windows-x64.zip` from [Releases](../../releases), unzip, run `TileGo.exe`.
+Grab `Tilingo-windows-x64.zip` from [Releases](../../releases), unzip, run `Tilingo.exe`.
 
 - Windows 10/11 x64, no engine install required
 - Saves live in `%APPDATA%/Godot/app_userdata/瓷砖围棋/`
@@ -130,7 +130,7 @@ git tag v0.8.0 && git push origin v0.8.0
 Local export (needs 4.7.2 export templates installed in the editor first):
 
 ```bash
-godot --headless --path . --export-release "Windows Desktop (Lite)" dist/TileGo.exe
+godot --headless --path . --export-release "Windows Desktop (Lite)" dist/Tilingo.exe
 ```
 
 The `Windows Desktop (Lite)` preset carries `custom_features="lite"` — that is the single switch for the slim build (see the `lite` field in `game_config.gd`).

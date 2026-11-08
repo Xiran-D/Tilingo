@@ -41,6 +41,77 @@ static func shape(points: PackedVector2Array, pad: float) -> PackedVector2Array:
 	return hull
 
 
+## 取「盘」的形状（**圆润版**）：凸包 → 外扩 `pad` → Chaikin 细分 `iters` 轮。
+##
+## ★ 为什么需要这一档（2026-11-08 用户报「爱因斯坦盘的裁切不规整」）：
+##   爱因斯坦盘的选区是一堆瓦片拼出来的，顶点凸包只剩**十几段长短不一的直线**，
+##   硬转折全在，画出来读成「一块被随手切开的多边形」，跟盘内细密的密铺肌理打架。
+##   彭罗斯是圆窗、雪花/立方体是规则多边形 —— 它们的凸包本来就该是那样，不用碰。
+## ★ 顺序不能倒：**先外扩、再平滑**。Chaikin 每轮把折线往内收（收敛到内切曲线），
+##   先平滑再外扩会把最外的顶点切掉 ⇒ 边缘瓦片露到盘外（背景从缝里透出来）。
+##   先外扩 `pad` 再平滑，内收量远小于 `pad`（实测 2 轮 ≈ 4px < 13）⇒ 盘边恒在瓦片之外。
+static func shape_round(points: PackedVector2Array, pad: float, iters: int = 2) -> PackedVector2Array:
+	var poly: PackedVector2Array = shape(points, pad)
+	if poly.size() < 3 or iters <= 0:
+		return poly
+	for _i in iters:
+		poly = _chaikin(poly)
+	return poly
+
+
+## 取「盘」的形状（**贴合棋盘真实外轮廓**版）：给一条已经算好的闭合环，沿法向外扩 `pad`。
+##
+## ★ 为什么不走凸包（用户 2026-11-08 报的「裁切不规整」就是这条）：
+##   凸包会把选区边缘的**凹口填平**成一大片没有格子的实心底色 —— 帽子的选区边缘本来就
+##   凹凸错落，填完之后左上角能出现 2 格深的空白块，读起来像"棋盘被谁切了一刀"。
+##   贴合版让盘边沿真实边界走，凹口保留 ⇒ 盘与棋盘是同一个形状，只是外面多一圈 pad。
+## ★ `offset_polygon` 对凹多边形可能返回多块（凹口的角被圆化时可能断开）⇒ 取面积最大的一块。
+static func shape_from_ring(ring: PackedVector2Array, pad: float, iters: int = 1) -> PackedVector2Array:
+	if ring.size() < 3:
+		return PackedVector2Array()
+	var grown: Array = Geometry2D.offset_polygon(ring, pad, Geometry2D.JOIN_ROUND)
+	var best := PackedVector2Array()
+	var best_area := -1.0
+	for g in grown:
+		var poly: PackedVector2Array = g
+		if poly.size() < 3:
+			continue
+		var a: float = absf(_poly_area(poly))
+		if a > best_area:
+			best_area = a
+			best = poly
+	if best.size() < 3:
+		best = ring
+	for _i in iters:
+		best = _chaikin(best)
+	return best
+
+
+## 多边形有向面积的绝对值（鞋带公式；`shape_from_ring()` 挑最大块用）。
+static func _poly_area(poly: PackedVector2Array) -> float:
+	var a := 0.0
+	var n: int = poly.size()
+	for i in n:
+		a += poly[i].cross(poly[(i + 1) % n])
+	return a * 0.5
+
+
+## Chaikin 角切割：每段取 1/4、3/4 两点（闭合折线首尾相连）。
+## 新点**逐点落在原折线上的段内** ⇒ 曲线恒在原多边形内侧、且逐轮收敛到二次 B 样条，
+## 不会像 Catmull-Rom 那样在尖角处往外鼓出（鼓出就会盖住相邻瓦片）。
+static func _chaikin(pts: PackedVector2Array) -> PackedVector2Array:
+	var n: int = pts.size()
+	if n < 3:
+		return pts
+	var out := PackedVector2Array()
+	for i in n:
+		var a: Vector2 = pts[i]
+		var b: Vector2 = pts[(i + 1) % n]
+		out.push_back(a.lerp(b, 0.25))
+		out.push_back(a.lerp(b, 0.75))
+	return out
+
+
 ## 画这块盘。三段，**顺序不能换**：
 ##   ① **厚度** —— 整块下移 `thickness`，用 `face.darkened(0.38)` 铺一层。
 ##      凸多边形下移后只有**下侧**露出这一条，上方被盘面自己盖住 ⇒ 不需要任何裁剪，

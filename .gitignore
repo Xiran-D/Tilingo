@@ -6,6 +6,11 @@
 /dist/
 *.exe
 
+# 自检 / 回归的一次性输出 —— 习惯落在工程根，不该进版本库
+# （g_*/m_* 前缀 + import/knife/orphan/smoke/struct 这些，全是 `regress.sh` 与审计脚本的产物）
+*.log
+*.status
+
 # ── Steam / Valve 专有二进制：开源版**不进版本库**（本地文件保留在磁盘，游戏靠反射降级运行）──
 # 想自己接 Steam 联机：自行下载 GodotSteam 放到 addons/godotsteam/，并放 steam_appid.txt。
 addons/godotsteam/

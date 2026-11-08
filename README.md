@@ -16,7 +16,7 @@
 
 ## 下载即玩
 
-到 [Releases](../../releases) 下载 `TileGo-windows-x64.zip`，解压，双击 `TileGo.exe`。
+到 [Releases](../../releases) 下载 `Tilingo-windows-x64.zip`，解压，双击 `Tilingo.exe`。
 
 - Windows 10/11 64 位，无需安装引擎
 - 存档在 `%APPDATA%/Godot/app_userdata/瓷砖围棋/`
@@ -130,7 +130,7 @@ git tag v0.8.0 && git push origin v0.8.0
 本地手动导出（需先在编辑器装好 4.7.2 导出模板）：
 
 ```bash
-godot --headless --path . --export-release "Windows Desktop (Lite)" dist/TileGo.exe
+godot --headless --path . --export-release "Windows Desktop (Lite)" dist/Tilingo.exe
 ```
 
 预设 `Windows Desktop (Lite)` 带 `custom_features="lite"`，这是精简版的唯一开关（见 `game_config.gd` 的 `lite` 字段）。

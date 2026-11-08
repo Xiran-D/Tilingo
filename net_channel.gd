@@ -42,6 +42,19 @@ signal relay_ready()                          # 双方都已就绪，通道可�
 signal relay_failed()                         # 连接失败或中断
 signal message_received(msg: Dictionary)      # 收到对端消息
 
+## ★★ 语音旁路（2026-11-01，用户口令「加入文字和语音聊天」）—— 与 `message_received`
+##   **刻意分成两条链路**，理由有三条，缺一条都会出真问题：
+##   ① **可靠性相反**：业务消息必须可靠有序（落子丢一个 = 两端盘面分叉）；
+##      语音必须**不可靠**（补发一个 2 秒前的音频包没有任何意义，还会把后面的包全堵住）。
+##      Steam 的 send_type 是每包选的 ⇒ 两条链路各自选，不共享队列。
+##   ② **通道号不同**：`SteamNet` 里语音走 `P2P_VOICE_CHANNEL`（1），业务走 0。
+##      同一通道号上混发，可靠消息会被音频包挤在中间（队头阻塞），落子延迟随说话时长上涨。
+##   ③ **负载形态不同**：业务是 `Dictionary` ⇒ `var_to_bytes`；语音是**裸字节**
+##      （每包 323 字节），走字典会在编解码里多做一次无用的类型包装 + 多一份拷贝。
+##   ⇒ 基类只留这三行：一条信号、一个发送口、一个能力探测。**默认实现 = 不支持**
+##     （与 `is_live()` 默认 false 同一口径：未实现的子类不许误报"我能发语音"）。
+signal voice_received(data: PackedByteArray)
+
 ## 通道是否可用（双方就绪）。默认 false —— 未实现的子类不会误报"可用"。
 func is_live() -> bool:
 	return false
@@ -55,3 +68,14 @@ func close_relay() -> void:
 ## 发送一条消息。未就绪时应**静默丢弃**（与中继的行为一致：联机中断不该崩在发送点上）。
 func send_message(_msg: Dictionary) -> void:
 	pass
+
+
+## 本通道能不能发语音。默认 false —— 调用方（`game.gd` 的语音按钮）必须问它，
+## 不许假设"有通道就能说话"（否则按钮亮着、按下去永远没人听见，且不报错）。
+func supports_voice() -> bool:
+	return false
+
+
+## 发送一个编码好的语音包。**未就绪 / 不支持时应静默丢弃并返回 false**（不可靠语义）。
+func send_voice(_data: PackedByteArray) -> bool:
+	return false

@@ -74,6 +74,7 @@ func start(lobby_id: int, role: String, peer_override: int = 0) -> Error:
 	_hook(SteamNet.steam_lobby_created, _on_lobby_created)
 	_hook(SteamNet.steam_lobby_joined, _on_lobby_joined)
 	_hook(SteamNet.steam_peer_packet, _on_packet)
+	_hook(SteamNet.steam_voice_packet, _on_voice)
 	_hook(SteamNet.steam_session_request, _on_session_request)
 	_hook(SteamNet.steam_session_failed, _on_session_failed)
 
@@ -113,6 +114,17 @@ func send_message(msg: Dictionary) -> void:
 	SteamNet.send_message(_peer, msg)
 
 
+## 语音旁路（基类契约，2026-11-01）。走**不可靠 + 独立通道**，见 `SteamNet.send_voice`。
+func supports_voice() -> bool:
+	return true
+
+
+func send_voice(data: PackedByteArray) -> bool:
+	if not _live or _peer == 0:
+		return false
+	return SteamNet.send_voice(_peer, data)
+
+
 func close_relay() -> void:
 	if _st == St.CLOSED:
 		return
@@ -125,6 +137,7 @@ func close_relay() -> void:
 	_unhook(SteamNet.steam_lobby_created, _on_lobby_created)
 	_unhook(SteamNet.steam_lobby_joined, _on_lobby_joined)
 	_unhook(SteamNet.steam_peer_packet, _on_packet)
+	_unhook(SteamNet.steam_voice_packet, _on_voice)
 	_unhook(SteamNet.steam_session_request, _on_session_request)
 	_unhook(SteamNet.steam_session_failed, _on_session_failed)
 	set_process(false)
@@ -137,6 +150,9 @@ func _process(_delta: float) -> void:
 	# ★ 必须显式轮询：`SteamNet._process` 只泵 `run_callbacks()`（不然信号永不触发），
 	#   但**不读 P2P 包** —— 读包是 `readP2PPacket` 主动拉。漏了这一步就是"发得出去、收不回来"。
 	SteamNet.poll_packets()
+	# ★ 语音通道（2026-11-01）**必须单独轮询一次**：`poll_packets()` 只读 0 号通道。
+	#   漏了这一行 = 语音发得出去、永远收不到，而且一条错都不报。
+	SteamNet.poll_voice_packets()
 
 	_frames += 1
 	match _st:
@@ -225,6 +241,15 @@ func _on_packet(remote_id: int, data: Dictionary) -> void:
 	#    这类"量具文案说谎"会让排查照着假数字走，比不打日志更坏。
 	print("[Steam] 收到数据包（来源=%d，字段=%d）" % [remote_id, data.size()])
 	emit_signal("message_received", data)
+
+
+## 语音包入站：转成基类信号（`game.gd` 只连基类那一条，不认 Steam）。
+## ★ 不做任何过滤与解析：字节原样交给 `VoiceChat.rx_push()`。这里是**每秒 25 次**的
+##   热路径，任何 print 都会把日志刷爆（真排查看统计量，见 `VoiceChat.info()`）。
+func _on_voice(_remote_id: int, data: PackedByteArray) -> void:
+	if _st == St.CLOSED:
+		return
+	emit_signal("voice_received", data)
 
 
 func _on_session_request(remote_id: int) -> void:

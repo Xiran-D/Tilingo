@@ -26,7 +26,19 @@ var yema_opponent: bool = false
 # ⚠️ 本字段是**随局下发**的瞬时值（菜单开局写一次、game `_ready` 读一次转成
 #   `xg_play_mode`），**自己不落盘**；落盘的是菜单的「选没选疾风」= `last_match.cfg`
 #   的 `xg` 字段（见 `save_last_match()`）。两件事别混。
-var board_size: int = 1      # GameConfig.RANDOM / STANDARD / ENHANCED（由菜单写入）
+var board_size: int = 1      # 尺寸档（由菜单写入）：SMALL(9×9) / STANDARD(13×13) / ENHANCED(19×19)
+                             #   ★ 旧值 RANDOM(0) 只从**旧棋谱/旧配置**读进来，由
+                             #     `MenuModel.restore_state()` 迁到 STANDARD（见 `_migrate_size()`）。
+## ★★ 2026-11-06 用户口令「把棋盘和该棋盘的随机模式拆成两个棋盘选项，比如彭罗斯和彭罗斯随机」：
+##   这是**第二根轴** —— 网格数档（`board_size`，决定对局时长）**正交**于形状随机与否。
+##   true = 「XX随机」：同一个格数档下，每局按 `_rand_seed` 现场生成一张**形状不同**的盘；
+##   false = 「XX」：固定几何（迭代/环数/层数由档位表钉死）。
+##   ⚠️ 与旧的 `board_size == RANDOM` **不是一回事**，两者并存且都要留着：
+##     · `RANDOM`(0) = 老的"自由随机档"（格数 ≈`random_target_tiles`，不看档位表）；
+##       只服务**旧棋谱/命令行/AI 训练仪器**，菜单已不再产出它。**别动它的语义** ——
+##       `--selfplay` / `--yemaduel` / `--aispec` 那一族全靠它复现，改一格就是训练数据漂移。
+##     · `board_random_shape` = 新的"随机形状、格数照档"，只有菜单会置真。
+var board_random_shape: bool = false
 var board_type: int = BOARD_PENROSE   # 棋盘类型（菜单写入）：BOARD_PENROSE 等，为未来扩展预留
 var ai_time_ms: int = 200    # AI 思考时长（毫秒，由菜单写入；默认＝普通档）
 
@@ -45,11 +57,21 @@ var ai_root_width: int = 0   # 0 = 自适应，取 AIEngine.auto_root_width（14
 const LOCAL: int = 0         # 本地双人
 const VS_AI: int = 1         # 人机对战（桌面菜单显示名 = 「磐石」；「疾风」也折到本档 + `xg_opponent`）
 
-const RANDOM: int = 0        # 随机棋盘：每局开局现场生成，格数约 200（详见 game.gd random_target_tiles）
+const RANDOM: int = 0        # 旧的"自由随机档"：每局现场生成，格数 ≈`random_target_tiles`（约 200）。
                              #   彭罗斯 → 在密铺里随机开一扇圆形窗口；立方体 → 从中心随机生长一片蜂窝。
                              #   由 _rand_seed 决定（联机时房主下发种子，保证双端棋盘一致）。
-const STANDARD: int = 1      # 标准棋盘（约 120 落子格 / 141 顶点）
-const ENHANCED: int = 2      # 加强棋盘（约 360 落子格 / 401 顶点）
+                             #   ★ 菜单**不再产出**它（菜单的「XX随机」= `board_random_shape`）；
+                             #     留着是因为旧棋谱/旧配置/AI 仪器（`--selfplay`/`--aispec` 一族）用它，
+                             #     那些路径要能逐位复现 ⇒ **语义一个字都不许改**。
+## ★★ 2026-11-06 三档统一对标常规围棋盘（用户口令「统一所有棋盘格数，全部对标常规棋盘的
+##   9*9 13*13 19*19」）：
+##   **小 / 中 / 大 = 9×9 / 13×13 / 19×19 = 81 / 169 / 361 格**（就近对齐，见 game.gd 的档位表）。
+##   ★ `RANDOM`(0) **不在菜单的尺寸栏**、也不是"随机"这个选项 —— 菜单的「XX随机」走的是
+##     `board_random_shape`（同一档格数 + 形状随机）。`RANDOM`(0) 只保留给**旧棋谱/旧配置**
+##     与命令行/AI 仪器（语义照旧：自由随机，格数 ≈`random_target_tiles`）。
+const SMALL: int = 3         # 小 · 对标 9×9（各盘就近：彭罗斯 80 / 立方体 57 / 筝形 72 / 雪花 72 / 爱因斯坦 ~81）
+const STANDARD: int = 1      # 中 · 对标 13×13（彭罗斯 170 / 立方体 183 / 筝形 162 / 雪花 144 / 爱因斯坦 ~170）
+const ENHANCED: int = 2      # 大 · 对标 19×19（彭罗斯 360 / 立方体 381 / 筝形 288 / 雪花 408 / 爱因斯坦 ~360）
 
 const BOARD_PENROSE: int = 0 # 彭罗斯密铺（非周期菱形密铺棋盘）
 const BOARD_CUBE: int = 2    # 立方体棋盘：每 3 块菱形拼成一个正六边形（等距立方体视觉），六边形再排成蜂窝大盘
@@ -62,6 +84,12 @@ const BOARD_HAT: int = 5         # 爱因斯坦棋盘（帽子家族 / 非周期
                                  # ★ 2026-09-19 起它不再是「一种盘」，而是**一族三档**（见下面的 HAT_*）：
                                  #   盘的中心概念是「爱因斯坦瓦片 = 同一个 Tile(a,b) 连续族」，
                                  #   a/b 取不同值就得到帽子/海龟/幽灵，角谱与替换系统完全相同。
+# ⚰️ 2026-11-06 墓碑（名字不许回收）：`BOARD_RANDOM = 6` 已删除。
+#   它是上一版"棋盘栏第六块「随机」= 从五张盘里抽一张盘型"的编号，用户当天改为
+#   「棋盘 × 该棋盘的随机模式」两根轴（见 `board_random_shape`）⇒ 别名不复存在。
+#   ⚠️ 号码 6 **不许复用**：旧 `last_match.cfg` / 旧棋谱里可能留着 `board=6`，
+#     复用它会让"上一局是随机"静默变成另一张盘。旧值由 `MenuModel.restore_state()`
+#      按"棋盘 id 无效 ⇒ 整份作废"处理（退回默认盘），这是安全方向。
 const HAT_HAT: int = 0           # 帽子 the hat     = Tile(1, √3)：长边 8 条 + 短边 6 条，面积 8√3
 const HAT_TURTLE: int = 1        # 海龟 the turtle  = Tile(√3, 1)：把长短边对调，面积 10√3
 const HAT_SPECTRE: int = 2       # 幽灵 the spectre = Tile(1, 1) ：等边 14 边形，面积 (3+√3)√3 ≈ 8.196
@@ -561,6 +589,39 @@ var cursor_size: int = 96
 var cursor_applied_size: int = -1
 ## 最近一次加载失败的原因（空串 = 无错），由自检读取做断言。
 var cursor_last_error: String = ""
+
+# ====== 语音聊天的可调参数（2026-11-01 用户口令「记得在设置里也加上麦克风调试」）======
+# ★★ 真源在这里，**不在 `VoiceChat` 的 `@export` 默认值上**。
+#   理由：`VoiceChat` 每次进对局都会 `new()` 一个实例，若玩家在设置里调过增益、而对局实例
+#   读的是类默认值 ⇒ 每次进对局都退回 1.0，且**没有任何报错**（"我明明调过"）。
+#   ⇒ `game.gd::_ensure_voice()` 建实例后必须把这四个值灌进去（唯一灌点）。
+#   `VoiceChat` 那边的 `@export` 保留，只是"未接配置时的兜底"。
+## 采集增益（0.2~3.0）。小声说话对面听不清 ⇒ 拧它；不动编码，不会引入失真。
+var voice_input_gain: float = 1.0
+## 播放增益（0.0~2.0）。
+var voice_output_gain: float = 1.0
+## 抖动缓冲目标包数（1~6，每包 40ms）。网络抖就往上加，代价是延迟。
+var voice_jitter: int = 2
+## 能量门限（0~0.2，0 = 全发）。大于 0 时整包 RMS 低于它就不发 —— 省带宽、不送底噪。
+var voice_vad: float = 0.0
+## 选定的输入设备名（"" = 系统默认）。★ 换设备后由设置页调
+## `VoiceChat.set_input_device()` 重启采集，见那里"光改 AudioServer 不会重绑"的实测说明。
+var voice_input_device: String = ""
+## 选定的扬声器输出设备名（"" = 系统默认）。
+## ★ 它管的是**整台引擎**的输出（`AudioServer.output_device`），不只语音 —— 换到某个 USB 耳机后
+##   背景音乐/音效也一起过去，这正是玩家期待的行为（不然会出现"说话在耳机、音乐在外放"）。
+## ★ 不存进 `VoiceChat`：那个实例每次进对局都会重建，而设备是引擎级设置。
+var voice_output_device: String = ""
+
+
+## 把 `voice_output_device` 应用到引擎（"" = 系统默认）。
+## ★ 只在对局开麦 / 设置页选中时调，**不要在设置页建页时调**：`AudioServer` 换设备会重启
+##   音频驱动，句柄没稳时切会"啪"一声；而且进设置页并不代表玩家想改设备。
+## 幂等：已经就是这个设备时直接返回（重复赋值也会触发一次驱动重开）。
+func apply_audio_output_device() -> void:
+	if AudioServer.output_device == voice_output_device:
+		return
+	AudioServer.output_device = voice_output_device
 
 
 ## 「指针大小」滑条的索引 ↔ 实际像素 —— 设置页与配置读回的**唯一换算**。
@@ -1828,6 +1889,135 @@ func style_theme_button(btn: Button, host_bg: Color,
 		btn.add_theme_color_override(k, p["ink"])
 	btn.add_theme_color_override("font_disabled_color", p["disabled_ink"])
 
+## 把主题色套到 `OptionButton` 的**弹出列表**（`PopupMenu`）上。
+##
+## ★★ 为什么必须有它（2026-11-07 用户报「下拉选项风格还不一致，而且下拉里面也没有用主题色」）：
+##   `style_theme_button()` 覆盖的是按钮**本体**的 stylebox / 字体色；而下拉展开后的列表是一个
+##   **`PopupMenu` 节点**，它读的是**另一组** theme 项（`panel` / `hover` / `font_color` …）
+##   ⇒ 只套本体 = 本体跟主题、列表仍是引擎默认灰白。这就是那个"不一致"的正主。
+##
+## ★ 换主题也必须重套：popup 不在「按钮登记表」的重套链路里 ⇒
+##   `menu.gd::_restyle_page_buttons()` 对每个 `OptionButton` 额外调一次本函数。
+##   ⚠️ 两处必须一起改：只改这里 ⇒ 首次套对了、换主题后又变回旧色（用户报的就是这个）。
+func style_option_popup(opt: OptionButton, host_bg: Color) -> void:
+	if opt == null or not is_instance_valid(opt):
+		return
+	var p: Dictionary = button_palette(host_bg)
+	var pop: PopupMenu = opt.get_popup()
+	if pop == null:
+		return
+	# 列表底色/描边/内边距：与同类按钮**同一套调色板**（`button_palette()`），不另立一套颜色。
+	pop.add_theme_stylebox_override("panel", _dialog_box(p["fill"], p["border"], 8, 6))
+	# 悬停行：用 `fill_hover`（比面板亮/暗一档）+ 选中态描边色，保证"指到哪一行"看得见。
+	pop.add_theme_stylebox_override("hover", _dialog_box(p["fill_hover"], p["border_sel"], 8, 4))
+	pop.add_theme_stylebox_override("separator", _dialog_box(p["border"], p["border"], 0, 1))
+	pop.add_theme_color_override("font_color", p["ink"])
+	pop.add_theme_color_override("font_hover_color", p["ink"])
+	pop.add_theme_color_override("font_disabled_color", p["disabled_ink"])
+	pop.add_theme_color_override("font_separator_color", p["ink"])
+	# 行高/左右留白：让列表读起来跟按钮本体同一档密度（默认值偏窄，长选项会贴边）
+	pop.add_theme_constant_override("v_separation", 6)
+	pop.add_theme_constant_override("item_start_padding", 12)
+	pop.add_theme_constant_override("item_end_padding", 12)
+	# ★ 字号必须显式给：`OptionButton` 的 `font_size` **不会**传给 popup
+	#   ⇒ 不写这一行，列表里的字会比按钮上的小一号（实测最扎眼的一处不一致）。
+	pop.add_theme_font_size_override("font_size",
+		int(opt.get_theme_font_size("font_size")))
+
+## 下拉（`OptionButton`）本体的**立体 + 呼吸描边**盒（2026-11-07 用户口令
+## 「给这三个下拉列表也加上按钮同款效果，立体，边缘呼吸」）。
+##
+## ★ 为什么不能只靠 `style_theme_button()`：那一套是 `_dialog_box()` = 1px 均匀描边 + 平底色，
+##   是"表单输入框"的语言；主菜单里其它可点的东西（底栏四块 / 「开始」）都是**瓷砖**：
+##   面 + 受光斜面 + 3px 描边 + **呼吸发光**。三者并列时一眼就能看出两套语言。
+##
+## ★★ 口径：**同一份调色板**（`button_palette()`），只把"盒的形态"换成按钮族的语言 ——
+##   ① **立体**：底边加厚（`border_width_bottom` > 其余三边）+ 向下投影 ⇒ 整块"浮在面上"；
+##      按压时底边收窄、投影收起 ⇒ 肉眼可读的"按下去了"。
+##   ② **边缘呼吸**：描边与投影的**不透明度**跟主菜单瓷砖**同一条相位**（`_breath_t` /
+##      `BREATH_PERIOD`），投影尺寸也跟着胀缩 ⇒ 远看是一圈在呼吸的边光。
+##
+## ★ 返回的三只 `StyleBoxFlat` **实例必须被调用方保存**：呼吸是逐帧改这三只盒的
+##   `border_color` / `shadow_color` / `shadow_size`，**不能每帧重建**（重建会丢掉
+##   hover / pressed 的当前态，而且每帧 new 资源是纯浪费）。
+func style_option_button(opt: OptionButton, host_bg: Color) -> Dictionary:
+	if opt == null or not is_instance_valid(opt):
+		return {}
+	# 先铺按钮族的**全五态**（含字色 / disabled / focus）——立体盒只覆盖其中三态，
+	# 剩下的语义仍然与页面按钮同源（换主题时行为一致）。
+	style_theme_button(opt, host_bg, BTN_PAD_COMPACT)
+	var p: Dictionary = button_palette(host_bg)
+	var boxes: Dictionary = {"base": {}}
+	for st in ["normal", "hover", "pressed"]:
+		var bg: Color = p["fill"]
+		var bd: Color = p["border"]
+		var wall: int = 4          # 底边厚度 = 凸起时的"侧壁"
+		var lift: float = 3.0      # 投影下移（"离开面"的距离）
+		if st == "hover":
+			bg = p["fill_hover"]
+			bd = p["border_sel"]
+			lift = 4.0
+		elif st == "pressed":
+			bg = p["fill_press"]
+			bd = p["border_sel"]
+			wall = 2               # 按下：侧壁收窄
+			lift = 1.0             # 投影收起
+		var sb := StyleBoxFlat.new()
+		# ★ 面必须是**调色板原值**，不许在这里再压暗一档：`probe_button_theme()` 的读回口径是
+		#   `normal.bg_color == button_palette()["fill"]`，而 `--apptest` 的「换主题后按钮盒子
+		#   跟着换」正是靠它断"套对了"。压暗 0.05 会让那条判据红（实测：期望 0.362/0.616/0.392、
+		#   实测 0.344/0.585/0.372）—— 立体感由**底边加厚 + 下投影 + 亮描边**给，不靠改面底色。
+		sb.bg_color = bg
+		sb.set_corner_radius_all(int(DIALOG_CORNER))
+		sb.set_border_width_all(2)
+		sb.border_width_bottom = wall
+		sb.border_color = bd
+		sb.shadow_color = Color(bd.r, bd.g, bd.b, 0.30)
+		sb.shadow_size = 3
+		sb.shadow_offset = Vector2(0.0, lift)
+		sb.content_margin_left = BTN_PAD_COMPACT.x
+		sb.content_margin_right = BTN_PAD_COMPACT.x + 6.0   # 给右侧箭头留位
+		sb.content_margin_top = BTN_PAD_COMPACT.y
+		sb.content_margin_bottom = BTN_PAD_COMPACT.y
+		opt.add_theme_stylebox_override(st, sb)
+		boxes[st] = sb
+		boxes["base"][st] = bd      # 呼吸的基色（不改 alpha 的那一半）
+	# ★ 展开箭头：引擎默认那张是给**浅灰底**画的，压在主题色 fill 上只剩一点淡痕
+	#   （真机截图里几乎看不见 ⇒ 玩家看不出这是个能展开的下拉）。按同一份调色板的
+	#   `ink` 重上色；拿不到图标 / 图标是纯透明时静默跳过（不许让"美化"把控件弄坏）。
+	#   ⚠️ 只动图标、不碰 stylebox：`style_theme_native_body()` 会把上面刚套的三态盒覆盖掉。
+	var def: Theme = ThemeDB.get_default_theme()
+	for n in def.get_icon_list("OptionButton"):
+		var key: String = String(n)
+		var src: Texture2D = def.get_icon(key, "OptionButton")
+		if src == null or src.get_width() <= 0 or src.get_height() <= 0:
+			continue
+		var tex: ImageTexture = _recolor_icon(src, p["ink"], p["ink"])
+		if tex != null:
+			opt.add_theme_icon_override(key, tex)
+	return boxes
+
+## 逐帧呼吸：把描边 / 投影的不透明度与投影尺寸按 `pulse`（0..1）推一档。
+## ★ 与主菜单瓷砖的呼吸**同源同相位**（同一份 `pulse`），两处不许各算一条曲线 ——
+##   否则下拉与瓷砖的呼吸会互相打架，看起来像"闪"。
+func pulse_option_button(boxes: Dictionary, pulse: float) -> void:
+	if boxes.is_empty():
+		return
+	var a_border: float = lerpf(0.45, 1.0, pulse)
+	var a_shadow: float = lerpf(0.16, 0.42, pulse)
+	var glow: int = int(round(lerpf(2.0, 6.0, pulse)))
+	var base: Dictionary = boxes["base"]
+	for st in ["normal", "hover", "pressed"]:
+		var sb: StyleBoxFlat = boxes.get(st, null)
+		if sb == null:
+			continue
+		var bd: Color = base[st]
+		# `pressed` 呼吸弱一些：按住的瞬间应该"定住"，不该继续跟着脉动
+		var k: float = 0.55 if st == "pressed" else 1.0
+		sb.border_color = Color(bd.r, bd.g, bd.b, lerpf(1.0, a_border, k))
+		sb.shadow_color = Color(bd.r, bd.g, bd.b, a_shadow * k)
+		sb.shadow_size = int(round(glow * k))
+
 ## 选中态（实心 accent）—— 与上面的"未选"分开套，因为原生 Button 用 `toggle_mode` 表达选中。
 func style_theme_button_selected(btn: Button, host_bg: Color,
 		pad: Vector2 = BTN_PAD_PAGE) -> void:
@@ -2159,6 +2349,15 @@ func load_appearance(path: String = APPEARANCE_PATH) -> void:
 	# 找不到素材 → push_warning 后**沿用系统光标**（不报错，只是"我的光标怎么没了"）。
 	cursor_enabled = bool(cf.get_value("cursor", "enabled", cursor_enabled))
 	cursor_size = cursor_size_for_index(cursor_size_index(int(cf.get_value("cursor", "size", cursor_size))))
+	# 语音（2026-11-01）。读回时**钳位**，不直接信文件里的数：
+	# 手改过配置 / 旧版本残留的怪值会让 `VoiceChat` 收到 0 增益（永远静音）或
+	# 负抖动包数（`jitter_packets * PACKET_SAMPLES` 变成负数 ⇒ 播放器立刻开播 ⇒ 全程断续）。
+	voice_input_gain = clampf(float(cf.get_value("voice", "input_gain", voice_input_gain)), 0.2, 3.0)
+	voice_output_gain = clampf(float(cf.get_value("voice", "output_gain", voice_output_gain)), 0.0, 2.0)
+	voice_jitter = clampi(int(cf.get_value("voice", "jitter", voice_jitter)), 1, 6)
+	voice_vad = clampf(float(cf.get_value("voice", "vad", voice_vad)), 0.0, 0.2)
+	voice_input_device = String(cf.get_value("voice", "input_device", voice_input_device))
+	voice_output_device = String(cf.get_value("voice", "output_device", voice_output_device))
 	# 瓷砖色（对局 `tile_colors` / 立方体三面的真源）**不落盘**，所以读回时必须跟着棋盘色重算，
 	# 规矩与 `apply_preset()` 里那两行一致 —— 少了这两行，"存了竹青·浅、新开程序"时它仍是
 	# 声明时的初值（宣纸·浅棋盘色）= 又一个「配色回默认」，而且只在没人点过主题时才出现（静默）。
@@ -2229,6 +2428,14 @@ func save_appearance(path: String = APPEARANCE_PATH) -> void:
 	cf.set_value("display", "window_mode", window_mode)
 	cf.set_value("cursor", "enabled", cursor_enabled)
 	cf.set_value("cursor", "size", cursor_size)
+	# 语音（2026-11-01）。★ 与外观同文件不是"偷懒"：本工程只有这一个用户配置文件，
+	#   `display` 段也在这里 ⇒ 「玩家调过的东西都在这份文件里」这条不变量比"段名好听的分类"值钱。
+	cf.set_value("voice", "input_gain", voice_input_gain)
+	cf.set_value("voice", "output_gain", voice_output_gain)
+	cf.set_value("voice", "jitter", voice_jitter)
+	cf.set_value("voice", "vad", voice_vad)
+	cf.set_value("voice", "input_device", voice_input_device)
+	cf.set_value("voice", "output_device", voice_output_device)
 	var err: int = cf.save(eff)
 	if err != OK:
 		push_warning("外观配置保存失败：%d" % err)
@@ -2248,7 +2455,7 @@ func save_appearance(path: String = APPEARANCE_PATH) -> void:
 #
 # path 参数只为**自检**留缝：`--lastmatchtest` 用独立路径跑文件往返，不碰用户的真配置。
 func save_last_match(board: int, size: int, hat_kind: int, diff: int, mode: int,
-		xg: int = 0, path: String = LAST_MATCH_PATH) -> void:
+		xg: int = 0, rand_shape: int = 0, path: String = LAST_MATCH_PATH) -> void:
 	# ★★ 与 `save_appearance()` 同一道闸、同一套理由（见那里的长注释）：自动化运行不写用户的
 	#    `user://` 配置。放这一层的意义是**兜底**：现有两个调用点（menu.gd / menu_mobile.gd）
 	#    各自都记得套 `if not _is_automated_run():`，但"两处都记得"不是不变量 —— 本工程的老坑。
@@ -2268,6 +2475,9 @@ func save_last_match(board: int, size: int, hat_kind: int, diff: int, mode: int,
 	#   `board/size/hat_kind/diff/mode` 缺一个说明**记录写坏了**（整份作废）；
 	#   而 `xg` 缺只说明**这份记录是上一版写的**（默认 0 即可，别作废用户的选项）。
 	cf.set_value("last_match", "xg", xg)
+	# ★ 2026-11-06：棋盘「XX随机」那一半（= `GameConfig.board_random_shape`）。
+	#   与 `xg` 同一套新增口径：**不进**必需字段检查，缺了就当 0（旧记录 = 固定形状）。
+	cf.set_value("last_match", "rand_shape", rand_shape)
 	var err: int = cf.save(path)
 	if err != OK:
 		push_warning("上局选项保存失败：%d" % err)
@@ -2291,6 +2501,8 @@ func load_last_match(path: String = LAST_MATCH_PATH) -> Dictionary:
 	#   ⚠️ 别为"整齐"把它塞进那道检查：那会让**每个升级到本版的用户**丢掉一次上一局选项
 	#      （棋盘/大小全回默认），而收益只是少一个默认分支。
 	out["xg"] = int(cf.get_value("last_match", "xg", 0))
+	# ★ 2026-11-06：棋盘「XX随机」—— 同样**新增可选**：旧记录没有它 ⇒ 0（固定形状盘）。
+	out["rand_shape"] = int(cf.get_value("last_match", "rand_shape", 0))
 	# ★ 精简版没有联机：旧存档（或完整版留下的 last_match.cfg）里存着 `mode=ONLINE` 时
 	#   **降级成人机**。不降级的话 `game.gd _ready()` 会走 `mode == ONLINE` 分支去建 peer，
 	#   而玩家既没有 Steam 也没有对手 ⇒ 表现是"开局卡住"，且**不报任何错**。

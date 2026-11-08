@@ -54,7 +54,17 @@ extends RefCounted
 ## 先验混合权重：0 = 纯磐石排序，1 = 纯网络排序。
 ## ★ 用**名次混合**而不是分数混合：`_root_score` 的量纲是几万，网络输出是 −4.5~−1.6，
 ##   直接加权等于让网络消失。名次对量纲完全不敏感（`ai_engine.gd::_prepare_root` 里实现）。
-@export var nn_weight: float = 1.0
+## ★★ 2026-11-06 由 1.0 改成 **0.30**：`--yemaduel` 实测（170 格 / pw=100 / 换色 16 局/档）
+##   在剪枝后混合下 w=1.0 是 6.3%、w=0.3 是 31.3%（两批合并 32 局 28.1%）
+##   ⇒ 全额替换磐石排序明显更差。0.3 是实测最好的一档（仍不如纯磐石，见 `nn_after_prune`）。
+@export var nn_weight: float = 0.30
+## 先验混合位置：false = 在根层 Top-K 剪枝**之前**（历史行为，网络能影响候选集）；
+## true = 在剪枝**之后**（候选集完全由磐石决定，网络只重排内部顺序）。
+## ★★ 2026-11-06 由 false 改成 **true**：实测剪枝前混合在 w=0.1/0.3/0.5/1.0 下是
+##   12.5% / 12.5% / 6.3% / 0%（对纯磐石），而**剪枝后 w=0.3 是 31.3%**
+##   ⇒ 先验伤害棋力的主要途径是"把磐石要搜的点挤出前 K"，不是"排得差"。
+##   ⚠ 两种模式都由 `--yematest` ⑥b 分叉断言（各自都有牙齿），别只验一种（§143）。
+@export var nn_after_prune: bool = true
 @export var weights_path: String = "res://ai/yema_weights.json"
 ## 权重缺失/不可用时是否允许「静默退化成磐石」。默认 false —— 宁可开局就报红，
 ## 也不要让人以为在下野马、其实在下磐石（那种错没人看得出来）。
@@ -97,6 +107,8 @@ func _apply_search_params() -> void:
 		return
 	inner.time_budget_ms = time_budget_ms
 	inner.komi = komi
+	# ★ 混合位置随本实例的设置走（`--yematest` / 对打仪都靠这一行才量得到两种模式）。
+	inner.ext_prior_after_prune = nn_after_prune
 	if threads > 0:
 		inner.threads = threads
 	if root_width > 0:

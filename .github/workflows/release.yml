@@ -17,8 +17,8 @@ jobs:
     env:
       GODOT_VERSION: "4.7.2"
       PRESET: "Windows Desktop (Lite)"
-      OUT_EXE: "dist/TileGo.exe"
-      ZIP_NAME: "TileGo-windows-x64.zip"
+      OUT_EXE: "dist/Tilingo.exe"
+      ZIP_NAME: "Tilingo-windows-x64.zip"
 
     steps:
       - name: Checkout

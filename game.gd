@@ -59,14 +59,56 @@ extends Node2D
 ## 大出一圈 —— BFS 球贴着池边界会被削平。实测：level 3 池（377 片）取 310 片时填充率
 ## 掉到 0.51（< 0.55 门槛），所以默认 4（池 2584 片）。level 5 约 1.8 万片，太慢，别开。
 @export_range(2, 4, 1) var _hat_pool_level: int = 4
-## 「标准」档落子格数
-@export_range(40, 400, 1) var hat_std_tiles: int = 150
-## 「加强」档落子格数
-@export_range(40, 600, 1) var hat_big_tiles: int = 310
+## 「小」档落子格数（对标 9×9 = 81；削峰后实测 77）
+@export_range(40, 400, 1) var hat_small_tiles: int = 81
+## 「中」档落子格数（对标 13×13 = 169；削峰后实测 159）
+@export_range(40, 400, 1) var hat_std_tiles: int = 169
+## 「大」档落子格数（对标 19×19 = 361；削峰后实测 331）
+@export_range(40, 600, 1) var hat_big_tiles: int = 361
 ## 「随机」档目标格数 —— **爱因斯坦专用**，不与其它盘共用的 random_target_tiles 混用。
 ## 2026-09-20 用户口径：三种类随机盘格数提到 240~300 → 默认 270，±random_tile_jitter(12)
 ## = 258~282，正好落在窗口内。
 @export_range(40, 600, 1) var hat_rand_tiles: int = 270
+
+## ---- 削峰（抠掉高气数落子点，把平均气数压向四方盘的 4）----
+## 帽子密铺上一块瓦片的共边邻居数（= 围棋**初始气数**）分布很宽：实测 200 片随机盘
+## 平均 4.9 气、6 气点占 42%、σ 1.14；而四方盘内点恒 4 气。削峰 = 抠掉一部分落子点。
+## 实测（精确参考实现，5 颗种子一致；脚本 `工作区/爱因斯坦瓦片参考/_trim_tradeoff.py`）：
+##   · 松约束（`hat_peak_floor_deg = 2`）：抠 9~13% → 平均 4.00，但 **≤3 气点 14%→26~30%（翻倍）**
+##   · 紧约束（默认 `= 4`）：抠 6~10% → 平均 4.31~4.40，**≤3 气点不变**、σ 1.14→0.87、
+##     6 气点 42%→10% ⇒ 纯赚，故默认走这条
+## ★ 不可能「处处 4 气」：帽子是 13 边凹瓦片，对偶图不可能是 4-正则（4-正则平面图的
+##   对偶必是四边形密铺）⇒ 只能做到「平均 4 + 有余差」。真要处处 4 气只有四边形盘（彭罗斯）。
+@export var hat_peak_trim: bool = true
+## 「不许伤人」约束：被抠点的**每个**邻居，抠完后气数仍须 ≥ 本值。
+## 4 = 绝不让任何点跌破四方盘水平（默认）；调 2 就退化成「硬压平均 4」，代价见上。
+@export_range(2, 6, 1) var hat_peak_floor_deg: int = 4
+## 只抠气数 ≥ 本值的点（低于它的点本身已经薄，抠它只会让旁边更薄）。5 = 只削 5/6 气点。
+@export_range(5, 6, 1) var hat_peak_min_deg: int = 5
+## 抠点上限（占目标格数的比例）—— 保险丝。默认 0.15 比实测需要的 6~10% 宽一档。
+@export_range(0.0, 0.30, 0.01) var hat_peak_max_frac: float = 0.15
+## 削峰留下的**凹坑**怎么画。纯视觉档位，不影响任何规则量（坑本来就不在 `tiles` 里）。
+## ★ 下面这些档位只在 `hat_peak_fill_holes = false` 时生效。
+## ★ 目检结论（2026-11-04，五版对比后定 3）：坑的形状就是帽子瓦片本身（不规则、尖角多、细腰），
+##   按这个形状铺色 —— 不管深色 / 淡色 / 镂空 / 分层渐变 —— 在浅棕盘上都读成「棋盘被虫蛀了几个洞」。
+##   规整的圆是这张盘上**唯一**的圆形元素（面模式棋子是整块瓦片染色）⇒ 一眼读作「孔 / 标记」，
+##   既交代了「这里不能下」，又不会弄脏盘面肌理。
+@export_enum("不画:0", "平涂:1", "漏斗:2", "圆孔:3", "镂空:4") var hat_peak_hole_style: int = 3
+## ★★ 洞的处理总开关：true = **均分给相邻格**（洞彻底消失，盘面无缝），false = 保留洞并按下档画。
+## 为什么默认均分（2026-11-05 用户「都不算好看」后定）：只要洞还在，它就一定难看 ——
+##   它的形状是帽子瓦片本身（不规则、尖角、细腰），铺色/镂空/渐隐都只是换成另一种难看。
+##   均分把这格按「离哪个邻居格心最近」切成 Voronoi 块并进邻居，**盘面上根本没有洞**，
+##   只在原地留下一圈像细胞边界的接缝（两侧同色棋子时接缝自动不画）。
+##   代价：被并的邻居格子面积 +8%~26%（几何账：一块瓦片的面积被 5~6 个邻居按中垂线分掉）。
+@export var hat_peak_fill_holes: bool = true
+## 坑的深度（把 `board_tile_color` 压暗多少）。平涂档整块用；漏斗档是「最深处」；圆孔档是孔色。
+## 按底色派生而不是给固定色：盘色随主题 / `appearance.cfg` 变，写死的色在别的配色下会突兀。
+@export_range(0.05, 0.8, 0.01) var hat_peak_hole_dim: float = 0.34
+## 圆孔档的半径系数（× 全盘最小内切圆半径）。★ 别调到 1.0 以上：会被误当成棋子。
+@export_range(0.0, 1.2, 0.01) var hat_peak_hole_dot: float = 0.62
+## 漏斗档（style=2）的层数与收缩量：把坑多边形按顶点向形心收缩 n 次，每层再压暗一档。
+@export_range(1, 10, 1) var hat_peak_hole_layers: int = 6
+@export_range(0.0, 0.95, 0.01) var hat_peak_hole_shrink: float = 0.7
 
 @export_group("配色")
 @export var fat_color: Color = Color(0.78, 0.82, 0.88)
@@ -134,6 +176,18 @@ extends Node2D
 ##   看起来就是"盘要出窗口了"。减半 + 让 `_adapt_to_screen()` 把 pad 计入边距（见那里），
 ##   盘边距窗口恒为 `board_margin()`，与 pad 取值无关 —— 这是结构性的，不靠碰巧。
 @export_range(0.0, 80.0, 1.0) var board_panel_pad: float = 13.0
+## 盘边是否贴合**棋盘真实外轮廓**（`BoardPanel.shape_from_ring()`）—— 全盘型共用。
+## ★ 2026-11-08 用户口令「这种效果不错，推广到全部棋盘」：原先所有盘都取顶点**凸包**，
+##   它会把边缘凹口填平成一大片没格子的实心底色（爱因斯坦盘左上角实测有 2 格深的空白块）。
+##   贴合版让盘沿真实边界走 ⇒ 盘与棋盘同形，只多一圈 pad，空白带彻底消失。
+## ★ 关掉退回「凸包外扩」（旧行为，留着做对照）。
+@export var board_panel_fit_outline: bool = true
+## 凸包档下是否走**圆润版**（凸包外扩后 Chaikin 平滑，见 `BoardPanel.shape_round()`）。
+## ★ 只在 `board_panel_fit_outline = false` 时才有意义。
+@export var board_panel_round_hull: bool = true
+## 平滑轮数（贴合档也用它，见 `BoardPanel.shape_from_ring()` 的 `iters`）。
+## ★ 上限 4：Chaikin 每轮往内收一点，收过头会切进最外的瓦片（盘边跑到瓦片里面）。
+@export_range(1, 4, 1) var board_panel_round_iters: int = 2
 ## 盘的下方厚度 px（0 = 纯平板，没有立体感）。
 @export_range(0.0, 30.0, 0.5) var board_panel_thickness: float = 7.0
 ## 盘面色 = **主题棋盘色 × 它**（默认白 = 原样跟随主题；想更暗/更偏色都在这里拧，不动主题）。
@@ -234,6 +288,10 @@ var _hat_pool_size: int = 0             # 本次池的片数（日志 / 启动�
 ## 选区算法开关：0 = BFS 圆底 + 剔叶片修补（默认，保证最小邻接度 ≥2）；1 = **裸 BFS**。
 ## ★ 只给自检 ⑤ 的**阴性对照**用 —— 切回 1 必须能重现「度数 1 的尖头」，否则说明探针是瞎的。
 var _hat_pick_mode: int = 0
+## 圆底档位：0 = **几何圆盘**（`_hat_radial_pick()`，按帽子档参考形心取最近 N 片，默认）；
+## 1 = 强制裸 BFS 球（2026-11-08 起只给自检 ⑤ 的「平滑器对照」用：平滑器要证明自己能把
+## BFS 圆底上那些走廊鼓包 / 凹口救平 —— 几何圆盘本来就圆，平滑器的增量会被噪声淹没）。
+var _hat_radial_mode: int = 0
 ## 剔叶诊断（每次生成时重置）：「轮数」= 实际跑了几轮修补（上限 8）；「禁片数」= 累计剔掉几片；
 ## 「撤回」= 1 表示某轮补不回 n_target、不得已把叶片放了回去（此时最小度可能仍为 1）。
 var _hat_trim_passes: int = 0
@@ -246,6 +304,23 @@ var _hat_round_swaps: int = 0
 var _hat_round_mode: int = 0
 var _hat_seed_tile: int = -1            # 本次种子片（池索引；固定档恒为「离池形心最近」那片）
 var _hat_rot_deg: float = 0.0           # 本次整盘朝向（只有随机档会转，固定档恒 0）
+## 削峰（`hat_peak_trim`）的**临时挂起**标志 —— 只给自检 ⑤ 用。
+## ★ 理由：⑤ 那几条判据考的是「选盘 / 装配的形状与最小度」，而削峰是**装配后的后处理**，
+##   会在盘内留下凹坑 ⇒ 凸包填充率按抠点比例下降（9% 的洞 ≈ 0.84 → 0.76），
+##   开着测会把形状判据拉红，那是**判据被污染**，不是算法退化。
+##   削峰本身由 `--hatpeaktest` 独立验收（含阴性对照），不靠 ⑤ 的副作用顺带覆盖。
+var _hat_peak_suspend: bool = false
+var _hat_peak_removed: int = 0          # 本次削峰抠掉几格（日志 / 自检读数）
+## 上一次生成的**盘面总面积**（未缩放的原始坐标）。均分洞的验收判据要用它：
+## 均分只是把洞的空间重新划分给邻居 ⇒ 总面积必须与「不削峰同种子」那张盘**相等**（差 < 0.5%）。
+var _hat_area_last: float = 0.0
+## 均分洞时「Clipper 返回多块」的次数（诊断：正常应恒 0；>0 说明某块只和邻居共点、不共边）
+var _hat_peak_merge_bad: int = 0
+## 本次均分进邻居的块数（诊断 / 自检：正常应 ≈ 洞数 × 邻居数）
+var _hat_peak_filled: int = 0
+## 本次削峰留下的凹坑：每元素 = 一块被抠掉的瓦片的**顶点索引数组**（索引进 `vertices`）。
+## 只给绘制用（画成压暗的坑底）；不参与任何规则 / 邻接 / 数子 —— 那些集合里根本没有这些格子。
+var _hat_peak_holes: Array = []
 
 # 随机棋盘（「随机」档）状态
 ## 随机棋盘的种子：整张盘面由它唯一决定。单机每局重掷；联机由房主下发（保证双方同一张盘）。
@@ -253,6 +328,12 @@ var _hat_rot_deg: float = 0.0           # 本次整盘朝向（只有随机档�
 ## 也让同一颗种子必定复现同一张盘（自检 --randtest 与 --boardseed=N 都依赖这一点）。
 var _rand_seed: int = 0
 var _rand_target: int = 0               # 本次实际抽到的目标格数（HUD / 日志展示用）
+## ★★ 2026-11-06：棋盘「XX随机」时的目标格数（= 当前**档位**的对标格数 81/169/361）。
+##   0 = 不覆盖 ⇒ 沿用老的 `random_target_tiles`（旧 RANDOM 档 / AI 仪器 / 旧棋谱）。
+##   由 `_apply_board_size()` 唯一写入（它才知道档位枚举），四个随机生成器只读它。
+##   ⚠️ 为什么要有它：`random_target_tiles` 是**旧口径的唯一真源**，一个字节都不许动 ——
+##     `--selfplay` / `--yemaduel` / `--aispec` 那一族要靠它逐位复现，改了就是训练数据漂移。
+var _rand_target_override: int = 0
 
 # ====== 落子 / 提子动画 ======
 const STONE_ANIM_TIME: float = 0.3   # 落子落下、提子消散的时长（秒）
@@ -535,6 +616,14 @@ func _ready():
 	if "--yematest" in _args:
 		GameConfig.mode = VS_AI
 		GameConfig.yema_opponent = true
+		# ★★ 2026-11-06：盘面**钉成 golden 录制时那张**（彭罗斯 · 迭代 4 · 裁剪 0.82 = 120 格）。
+		#   为什么：`ai/yema_golden.json` / `_v1.json` 每条局面都带一串 **120 字符** 的 `state`，
+		#   `check_golden()` 只比对 `state` 长度与当前盘点数相同的那些局面；三档口径统一成
+		#   9×9/13×13/19×19 之后中档变 170 格 ⇒ **一条都对不上** ⇒ 返回 -2（有效分母 0）。
+		#   那条红说的是"golden 与当前盘不符"，**不是**"特征分叉"——判据没坏，是基线漂移了。
+		#   ⇒ 钉死基线，而不是重录 golden：这组判据要的是**可复现的固定盘**，不该跟着菜单
+		#     默认值跑（§116 干净基线不能是"当前盘面"）。真要换基线，请连 golden 一起重录。
+		GameConfig.board_size = GameConfig.STANDARD
 	var start_mode: int = GameConfig.mode
 	if start_mode != LOCAL and start_mode != VS_AI and start_mode != ONLINE:
 		start_mode = LOCAL
@@ -556,6 +645,43 @@ func _ready():
 	if GameConfig.ai_time_ms > 0:
 		ai_time_ms = GameConfig.ai_time_ms
 	_apply_board_size(GameConfig.board_size)   # 根据菜单选择的尺寸设定迭代次数/裁剪半径
+	# ★ 自检 --yematest：把盘钉成 golden 录制时那张（理由见上面那个 flag 分支）。
+	#   ⚠️ 必须写在 `_apply_board_size()` **之后**（它才是写 iterations/clip_radius 的地方），
+	#     且必须在 `generate_board()` 之前。
+	if "--yematest" in _args:
+		iterations = 4
+		clip_radius = 0.82
+	# ★ 自检 --aivaltest 同理把盘钉成 **n=120**（价值网络的训练盘）。
+	#   不跟着菜单默认值跑（§116）：判据要的是可复现的固定盘，而中档现在是 170 格。
+	if "--aivaltest" in _args:
+		iterations = 4
+		clip_radius = 0.82
+	# ★★ 2026-11-07：**通用彭罗斯几何覆盖** `--penrose=<迭代>:<裁剪半径>`（写成 `--penrose=4:0.82`）。
+	#   为什么要它：价值网络（`ai/value_weights.json`）是在 **n=120** 的彭罗斯盘上训的
+	#   （`nn/data/sp/sp_120_*.txt`），而三档口径统一之后菜单默认中档是 170 格 ⇒
+	#   要在它的"主场"上做 A/B，就得能把盘钉回 120，否则一上来就混进跨盘尺度偏差。
+	#   旧办法只有 `--yematest` 里那条硬钉（它绑在 golden 上），对别的仪器不可用。
+	#   ⚠️ 必须写在 `_apply_board_size()` **之后**（它才是写 iterations/clip_radius 的地方），
+	#     且必须在 `generate_board()` 之前 —— 与上面 `--yematest` 那条同一条纪律。
+	#   ⚠️ 只在彭罗斯盘型下有意义（别的盘型由 `_apply_board_size()` 的环数/层数决定几何）；
+	#     给了但盘型不是彭罗斯时**打一行说明**，不静默失效（§138 同族）。
+	#   与 `--yematest` 同时给时**本条优先**（它更具体，且是显式写出来的那个）。
+	for a in _args:
+		if not a.begins_with("--penrose="):
+			continue
+		var pv := a.substr(10).split(":", false)
+		if pv.size() != 2:
+			print("[penrose] ✗ 用法：--penrose=<迭代>:<裁剪半径>（例 --penrose=4:0.82 = 120 格）")
+			get_tree().quit(1)
+			return
+		iterations = int(pv[0])
+		clip_radius = float(pv[1])
+		if GameConfig.board_type != GameConfig.BOARD_PENROSE:
+			print("[penrose] ⚠ 盘型是 %d，不是彭罗斯 ⇒ --penrose 只改了 iterations/clip_radius，几何不变"
+				% GameConfig.board_type)
+		else:
+			print("[penrose] 几何覆盖：迭代 %d · 裁剪 %.2f" % [iterations, clip_radius])
+		break
 	# 「迷你」固定档（n=3 / 72 格）现在没有尺寸槽位可用（RANDOM = 随机档），只能直钉层数
 	if "--snowmini" in _args:
 		_snow_r_actual = 3
@@ -596,7 +722,6 @@ func _ready():
 	_build_clock()
 	reset_game()
 	# ⚰️ 2026-10-13：这里原有 `_build_tuning_ui()`（TAB 运行时调参面板），面板整块删除。
-	_build_ai_hud()
 	_build_game_hud()
 	# 复盘 HUD（棋谱阶段② 交互层）：**只建一次**，复盘进出只翻 `visible`。
 	# ⚠️ 必须在这里（`_ready` 里）建：`--browsetest` 等自检直接调 `replay_enter()`，
@@ -704,8 +829,15 @@ func _ready():
 	#   AI 一落就把游标与盘面对上不上了（而这条只有人机 + AI 执黑 + 从菜单进复盘三件事
 	#   同时发生时才会现形，属于"罕见组合"，不做判据根本量不到）。
 
+	# ★ 2026-11-02：开局提示横幅。放在 AI 起手**之前** —— 否则"开始"提示和 AI 那一手
+	#   同时出现，玩家只会觉得"我还没看明白它已经下完了"。
+	_show_start_banner()
 	if game_mode == VS_AI and current_player == AI_COLOR and _replay == null:
-		_start_ai_turn()
+		# AI 先行：把起手推到横幅淡入+停留之后；没弹横幅（自检/联机关了）就走老路径立即起手。
+		if _start_banner_allowed():
+			_start_ai_turn_after_banner(start_banner_fade + start_banner_hold)
+		else:
+			_start_ai_turn()
 	# 调试：命令行带 --screenshot 时截图保存后退出
 	if "--screenshot" in _argv():
 		# `--screenshot --pause`：先把 ESC 暂停面板打开再截。
@@ -724,16 +856,27 @@ func _ready():
 		# （单张静态图能同时看到近端已散尽、中段半透明、远端还没动，那一帧就是顺序本身）。
 		if "--shotwave" in _argv():
 			_setup_shot_wave()
-		# `--screenshot --shotemote`：**两条侧抽屉 + 两边各一个气泡**，一次截全（2026-10-21）。
-		#   ★ 自绘图形（脸 / 心 / 星）**只有肉眼能判**：有没有画歪、52px 格子里线宽糊不糊、
-		#     深色抽屉底上"淡底的脸"会不会和底板混成一片 —— 这些都不产生任何断言失败，
-		#     所以必须有这一档目检（同 §11：探针 / 守卫 / 目检三分工）。
-		#   ★ 2026-10-21 第二轮靠这一张图逮到两个**判据全绿**的真 bug：
-		#     ① 身份槽与回合提示按 `page_surface()` 挑字色、却画在深色抽屉底上（对比度 1.2）；
-		#     ② 表情格的墨色按"面"推、而按钮底是调色板的浅底（白线压浅金，1.79）。
-		#     两者都已改成"参照物 = 真正画在上面的那块面"，见 `_drawer_surface()`。
-		if "--shotemote" in _argv():
-			_setup_shot_emote()
+		# `--screenshot --shotend`：直接走一次数子终局再截（2026-11-02）。
+		#   ★ 为什么需要这一档：终局会**自动拉开两侧抽屉**（`_open_drawers_for_result()`），
+		#     "面板有没有和结算面板打架、右抽屉里的按钮还在不在"不产生任何断言失败，只有肉眼能判。
+		if "--shotend" in _argv():
+			# 先把两侧折起来（模拟玩家玩到终局时是折着的状态）再终局。
+			# ★ 不折的话默认就是展开的，这张图**恒真**、什么也证不了（§110 那类错）。
+			_drawer_left_open = false
+			_drawer_right_open = false
+			_refit_hud()
+			_finish_game()
+		# `--screenshot --shotchat`：左抽屉塞满聊天记录，一次拍到「身份槽 + 聊天区 + 短语 + 输入行」。
+		#   ★ 为什么必须有这一档：`--chattest` ⑮ 只量"内容最小尺寸 ≤ 内容区"，它**看不出**
+		#     "输入行是不是被挤成一条缝"、"记录区有没有盖住短语格"、"30px 小按钮里的字有没有出格"。
+		#     `LineEdit` 的盒子、占位符颜色、行高这类只有肉眼能判。
+		# ⚰️ 2026-11-02：原来这里还有一档 `--shotemote`（截两条抽屉 + 两个头像上的表情）。
+		#   表情删除后它没有可拍的对象，整档随之删除（`_setup_shot_emote()` 同时删档）。
+		#   ★ 它当年逮到的两个真 bug 记在 `--shotchat` 与 `_drawer_surface()` 的注释里，别丢：
+		#     ① 身份槽按 `page_surface()` 挑字色却画在深色抽屉底上（对比度 1.2）；
+		#     ② 表情格墨色按"面"再推一层（白线压浅金，1.79）。
+		if "--shotchat" in _argv():
+			_setup_shot_chat()
 		_capture_and_quit()
 	# 自检：--passtest 本地双人模式连点两次「停一手」，校验不会触发 AI
 	if "--passtest" in _argv():
@@ -747,11 +890,33 @@ func _ready():
 	#   走真实点击入口 `_on_area_input()`，正 / 负对照成对，看棋盘真的变了没有。
 	if "--readygate" in _argv():
 		_ready_gate_self_test()
-	# 自检：--emotetest 快捷表情 + 联机身份条（2026-10-21）
-	#   ★ 纯本地、不需要 Steam：判据量的是「消息入口 → 气泡状态 → 真实绘制计数 → 几何」。
+	# 自检：--netboardtest 联机**运行期换盘**（2026-11-03）
+	#   被测对象 = `_apply_net_board()`：房主按双方各选的一张盘把整套几何重生成。
+	#   为什么必须进回归：这条路径平时**只有真对局才走到**（本机单账号做不到两个玩家），
+	#   而"换了一半"的坏法当场不报错，只有玩家落子时才发现位置全错（静默）。
+	if "--netboardtest" in _argv():
+		_net_board_self_test()
+	# 自检：--idtest 左抽屉身份条（2026-10-21；★ 2026-11-02 由 `--emotetest` 改名而来 ——
+	#   表情删除后这一档测的东西里已经没有表情了，再用旧名字就是"按名字认它"的经典误导，§113）
+	#   ★ 纯本地、不需要 Steam：判据量的是「抽屉可见性 → 身份槽真实矩形 → 头像占位 →
+	#     真实绘制计数 → 棋盘居中」。
 	#   头像"真的从 Steam 取到图"那一条在 `--steamtest`（那里才有真 Steam）。
-	if "--emotetest" in _argv():
-		_emote_self_test()
+	# ⚠️ 改名连带面：`regress.sh` 里的条目、`--shotchat` / `--drawertest` 的注释、记忆文档。
+	#   按名字认它的地方会**静默失效**（旧命令不再跑，而 exit=0 照样绿）。
+	if "--idtest" in _argv():
+		_identity_self_test()
+	# 自检：--chattest 文字 / 语音聊天（2026-11-01）
+	#   ★ 纯本地、不需要 Steam，也**不需要真麦克风**：编解码走合成正弦（可量 SNR），
+	#     网络侧只量"有没有交给通道 / 有没有喂进播放队列"，不含任何"环境不支持就自动绿"的分支。
+	#   ★ 头部那条（输入框聚焦时对局快捷键必须让位）是这一批唯一会**打断对局操作**的风险点，
+	#     单独一对正负判据钉住它（正：聚焦时 R 不许重开；负：不聚焦时 R 必须走原路）。
+	if "--chattest" in _argv():
+		_chat_self_test()
+	# 自检：--taunttest AI 台词查表（2026-11-02）
+	#   ★ 纯本地、不需要 Steam / 不需要真对局：喂**构造好的前后快照**直接验分类与选句，
+	#     只有最后两条走真实入口（`_maybe_taunt()` 的总闸正负成对）。
+	if "--taunttest" in _argv():
+		_taunt_self_test()
 	# 自检：--drawertest 侧抽屉几何 + 严防重叠（2026-10-21 第二轮）
 	#   ★ 纯本地、不需要 Steam；量的是**真实矩形**（棋盘顶点盒 / 面板全局矩形 / 把手全局矩形）。
 	#   阴性对照（让位系数压 0 后判据必须报红）内建在 ④ —— 没有它这条判据永远绿。
@@ -799,19 +964,6 @@ func _ready():
 	for a in _argv():
 		if a.begins_with("--analyzetest"):
 			_analyze_self_test()
-			break
-	# 自检：--anlzprobe 局势层机制探针（确定性，先验层面；秒级）
-	for a in _argv():
-		if a.begins_with("--anlzprobe"):
-			_anlz_probe()
-			break
-	# 自检：--anlzdose 救活权重剂量-响应扫描（确定性，秒级）
-	# ★ 平级循环，**不要嵌进上面那个** —— 嵌套过一次（2026-10-07），
-	#   症状是「零输出 + exit 0」：日志连 [anlzdose] 首行都没有 ⇒ 函数从未被进入。
-	#   排查手法（技能 Part 4.1）：缺首行 = 标志没匹配上，不是函数内部卡住。
-	for a in _argv():
-		if a.begins_with("--anlzdose"):
-			_anlz_dose()
 			break
 	# 自检：--anlzreal 真实局面采样（确定性，先验层；替代造夹具）
 	for a in _argv():
@@ -887,6 +1039,20 @@ func _ready():
 		if a == "--nnprobe" or a.begins_with("--nnprobe="):
 			_nn_probe(a.substr(10))
 			break
+	# 自检：--valuetest=<权重.json>,<golden.json> 价值网络 GDScript 侧**两层**对拍（2026-11-07）
+	# ★ 与 `--nnprobe` 的分工：那个管「策略先验」（根节点排序），这个管「叶子价值」（终局分差目）。
+	#   两者是**两套网络、两套特征**，不许混用一份 golden（§119 参照物逐项相同）。
+	# ★ 同样写成 `a == "--valuetest" or a.begins_with(...)`：只写一个形式会对孤儿闸隐形（§113）。
+	for a in _argv():
+		if a == "--valuetest" or a.begins_with("--valuetest="):
+			_value_test(a.substr(12))
+			break
+	# 自检：--aivaltest 价值网络当**叶子评估**的接线（2026-11-07）
+	# ★ 与 `--valuetest` 的分工：那个钉「前向算得对不对」，这个钉「引擎有没有把正确的
+	#   盘面/行棋方/手数喂进去、分有没有真的走到效用里、多线程有没有同步」。
+	#   前向已经对拍了，所以这里可以放心拿同一套前向当参照物（§110 的边界见函数头注释）。
+	if "--aivaltest" in _argv():
+		_ai_value_term_test()
 	# 仪器：--xgfight 骨架二版 vs 一版配对换色自弈出胜率/目差（2026-10-14；调参用，无判定）
 	if "--xgfight" in _argv():
 		_xg_fight_probe()
@@ -919,6 +1085,13 @@ func _ready():
 	for a in _argv():
 		if a.begins_with("--aispec"):
 			_ai_spec_probe()
+	# 仪器：--aiduel **四款 AI 任意两两**配对换色对打（2026-11-04）
+	# ★ 与 `--xgduel` / `--yemaduel` 的分工：那两个是各自 vs 磐石的单向仪器；
+	#   本仪器能摆任意一对（磐石 rock / 流水 flow / 野马 yema / 疾风 xg），
+	#   解决「流水从来没有对打数据」这个缺口（它只有 `--liushuitest` 接线自检）。
+	for a in _argv():
+		if a.begins_with("--aiduel"):
+			_ai_duel_probe()
 	# 仪器：--selfplay **自对弈数据工厂**（AlphaZero 式，标签 = 完整访问分布 + 终局胜负，2026-10-24）
 	# ★ 与 --aigraph 的分工：aigraph 蒸教师（argmax 单点），selfplay 学自己的搜索（分布）。
 	for a in _argv():
@@ -965,9 +1138,6 @@ func _ready():
 	#     同前缀会让"自检压根没跑"的哨兵失效。
 	if "--browsetest" in _argv():
 		_replay_browse_test()
-	# 自检：--aiterr 终局评估质量（截断处 vs 下满后的真值）
-	if "--aiterr" in _argv():
-		_ai_territory_probe()
 	# 自检：--ailam 给 λ 混合定理论最优值（测 rollout 噪声 σ 与静态评估偏差 b）
 	if "--ailam" in _argv():
 		_ai_lambda_probe()
@@ -1042,6 +1212,9 @@ func _ready():
 	# 自检：--hattest 帽子盘（瓦片模板 + 8 块筝形分解 / 池阶梯 / 边到边 / 三档格数 / 随机档）
 	if "--hattest" in _argv():
 		_hat_self_test()
+	# 自检：--hatpeaktest 帽子盘「削峰」（抠高气数落子点 → 平均气数压向 4）
+	if "--hatpeaktest" in _argv():
+		_hat_peak_self_test()
 	# 自检：--captest 提子计数与终局计分健全性回归
 	if "--captest" in _argv():
 		_capture_self_test()
@@ -1218,8 +1391,8 @@ func _portrait_self_test() -> void:
 	#     （改前横屏实测右沿只剩 **5px**：宽度预算 320 被当成"距右"用，行宽 315 ⇒ 320−315=5）。
 	#     5px 与 200px 在"出屏"这条判据眼里**一模一样** —— 本条补的就是这个射程缺口。
 	#   ★ 期望值取**编译期字面量** `HUD_EDGE_MARGIN_LANDSCAPE`（**不取那个变量**）：
-	#     ⑤d 的阴性对照要改的正是那个变量 ⇒ 期望值若也读它，判据就把自己关掉了
-	#     （与 ⑤ 传 `HUD_TOUCH_MIN_PORTRAIT` 是同一条纪律）。
+	#     ⑤d 的阴性对照改的是被测物（现在是 `drawer_pad`），期望值必须与它脱钩，
+	#     否则判据会跟着被测物一起动、把报警自己关掉（与 ⑤ 传 `HUD_TOUCH_MIN_PORTRAIT` 同一条纪律）。
 	var jr5c: Array = judge_hud_layout(0.0, GameConfig.HUD_EDGE_MARGIN_LANDSCAPE)
 	var ok5c: bool = bool(jr5c[0])
 	if not ok5c:
@@ -1227,22 +1400,31 @@ func _portrait_self_test() -> void:
 	print("[portraittest] ⑤c 横屏档 HUD 离屏幕边 ≥ %.0f：%s → %s" % [
 		GameConfig.HUD_EDGE_MARGIN_LANDSCAPE, String(jr5c[1]),
 		"通过 ✓" if ok5c else "失败 ✗"])
-	# ⑤d **阴性对照**：把留白归 0（复现"贴着屏幕边"）⇒ 同一条判据必须报警。
-	#   ★ 改的是**被测物**（`hud_landscape_margin` ⇒ 布局真的贴边），**不改期望值** ——
-	#     这正是与 ⑤c 配对的意义：只有"必须绿"那一半的话，判据恒真也能过 ⑤d；
+	# ⑤d **阴性对照**：把抽屉内容的内缩归 0（复现"HUD 贴着屏幕边"）⇒ 同一条判据必须报警。
+	#   ★★ 2026-11-08 换了被测物：用户口令「改成抽屉与屏幕侧边相接」之后，面板是**贴着**
+	#     屏幕侧边的（外面那 `DRAWER_HANDLE_W` 是「关闭抽屉」窄键），HUD 盒离屏幕边的余量
+	#     = `DRAWER_HANDLE_W + drawer_pad`，**不再随 `hud_landscape_margin` 变** ⇒
+	#     旧杠杆（把那个边距归 0）已经推不动这个量，实测报「判据恒真」（= 没牙齿）。
+	#     ⇒ 杠杆换成真正决定它的那一个：`drawer_pad`（内容内缩）。
+	#   ★ 与 ⑤c 配对的意义不变：只有"必须绿"那一半的话，判据恒真也能过 ⑤d；
 	#     只有"必须红"那一半的话，判据永远不报警也能过 ⑤c。两半缺一不可。
-	#   ★ 不需要 await 下一帧：横屏分支只改盒子的 `position`（尺寸仍是自然宽高）⇒
-	#     子节点的局部矩形不变、全局矩形**立即**跟着移动（与 ⑥ 那种"改了 size 要等重排"不同）。
-	var gap_bak: float = GameConfig.hud_landscape_margin
-	GameConfig.hud_landscape_margin = 0.0
+	#   ★★ 必须 **await 一帧**再判（2026-11-08 实测）：旧杠杆（`hud_landscape_margin`）只改盒子的
+	#     `position`，宽度不变 ⇒ 可以同步量；新杠杆 `drawer_pad` 会让 `drawer_content_rect(1)`
+	#     的**宽度**从 172 变 200，而宽度要等容器下一次 sort 才落到按钮上。
+	#     不等帧量到的是中间态（盒子已左移、按钮宽还是旧的）⇒ 余量反而涨到 46，
+	#     阴性对照当场判「恒真」。§106：判据必须跑在能触发目标分支的那个局面上。
+	var pad_bak: float = drawer_pad
+	drawer_pad = 0.0
 	_refit_hud()
+	await get_tree().process_frame
 	var jr5d: Array = judge_hud_layout(0.0, GameConfig.HUD_EDGE_MARGIN_LANDSCAPE)
 	var ok5d: bool = not bool(jr5d[0])
 	if not ok5d:
 		ok = false
-	print("[portraittest] ⑤d 阴性对照（留白归 0，判据必须报警）：%s → %s" % [
+	print("[portraittest] ⑤d 阴性对照（抽屉内容内缩归 0，判据必须报警）：%s → %s" % [
 		String(jr5d[1]), "通过 ✓" if ok5d else "失败 ✗（判据恒真，等于没有判据）"])
-	GameConfig.hud_landscape_margin = gap_bak     # 还原**被测物**
+	drawer_pad = pad_bak     # 还原**被测物**
+	_refit_hud()
 	_refit_hud()
 	# 棋盘边距的第二条阴性对照：横屏档必须是 40（同一个量法）
 	_adapt_to_screen()
@@ -1482,27 +1664,61 @@ func _hat_dead_self_test() -> void:
 	#   ⚠️ 不能用 `_edge_neighbor` 反推：它每条边**只登记一次**（后到的片直接 continue），
 	#      拿它数度数必然偏小（实测把 142/150 个格子判成不一致，全是这个假报）。
 	#      正确做法是拿边的两个端点，在**所有**片里找「同时含这两点且不是自己」的那一片。
-	var geo_bad := 0
+	var adj_bogus := 0
+	var adj_missing := 0
 	for i in tiles.size():
 		var s: Dictionary = {}
 		var tvs: Array = tiles[i]
 		for k in tvs.size():
 			var a: int = tvs[k]
 			var b: int = tvs[(k + 1) % tvs.size()]
+			# ★★ 2026-11-06 修判据（原写法 `ntvs.has(a) and ntvs.has(b)` 会**假报**）：
+			#   只要求"两片都含这两个顶点"，没要求它们在**顶点序列里相邻**。
+			#   削峰（`_hat_peak_trim`）扣掉一片之后，剩下的片之间会出现
+			#   "共顶点但**不共边**"的关系（原来那片把边分成了两段）⇒ 旧写法把它算成邻居，
+			#   于是 `--hatdead` ③ 在削峰上线后报「邻接 4 vs 几何 5」（实测 4 格，全在洞边）。
+			#   ⇒ 改成**真的找相邻顶点对**（含首尾闭合）。这样它量的还是"共享一整条边"，
+			#     与规则侧 `adjacency`（池邻接，= 整边配对）同一个语义。
 			for j in tiles.size():
 				if j == i:
 					continue
 				var ntvs: Array = tiles[j]
-				if ntvs.has(a) and ntvs.has(b):
+				var nsz: int = ntvs.size()
+				var hit := false
+				for q in nsz:
+					var xa: int = int(ntvs[q])
+					var xb: int = int(ntvs[(q + 1) % nsz])
+					if (xa == a and xb == b) or (xa == b and xb == a):
+						hit = true
+						break
+				if hit:
 					s[j] = true
 					break
+		# ★★ 2026-11-06 拆成两个方向（原写法只要"几何 ≠ 邻接"就红，会把削峰的正常后果误判成 bug）：
+		#   · `adj_bogus`：邻接里有**几何上不相邻**的邻居 ⇒ 真问题（假相邻 = 隔着空处互相紧气）
+		#   · `adj_missing`：几何有、邻接没有 ⇒ **削峰"洞均分"的正常后果**
+		#     （`_hat_fill_holes()` 把洞的顶点并进相邻格的顶点集合 ⇒ 那一格的多边形变大了，
+		#      于是它与隔着洞的片"几何上共边"，但规则侧的 `adjacency` 是按**池邻接**映射的，
+		#      不会跟着变 —— 这是对的：视觉上没洞 ≠ 棋理上相邻）。
+		#   ⇒ 判据：`adj_bogus` 恒须 0；`adj_missing` 只在**没有洞均分**时才须 0。
 		if s.size() != adjacency[i].size():
-			geo_bad += 1
-			print("[hatdead]    ✗ 度数不一致 t%d：邻接 %d vs 几何 %d 坐标%s 邻居%s"
-				% [i, adjacency[i].size(), s.size(), str(tile_centers[i].round()), str(s.keys())])
-	print("[hatdead] ③ 邻接表 vs 纯几何邻居数不一致的格子 = %d / %d（须 0）"
-		% [geo_bad, tiles.size()])
-	if geo_bad > 0:
+			var bogus := 0
+			for nb in adjacency[i]:
+				if not s.has(int(nb)):
+					bogus += 1
+			if bogus > 0:
+				adj_bogus += 1
+				print("[hatdead]    ✗ 邻接含几何外邻居 t%d：邻接 %d（其中假边 %d）vs 几何 %d 坐标%s"
+					% [i, adjacency[i].size(), bogus, s.size(), str(tile_centers[i].round())])
+			else:
+				adj_missing += 1
+				print("[hatdead]    · 几何多出邻居 t%d：邻接 %d vs 几何 %d 坐标%s（洞均分 %d 格）"
+					% [i, adjacency[i].size(), s.size(), str(tile_centers[i].round()), _hat_peak_filled])
+	print("[hatdead] ③ 邻接含几何外邻居 = %d / %d（须 0）｜几何多出邻居 = %d / %d（无洞均分时须 0；本盘洞均分 %d 格）"
+		% [adj_bogus, tiles.size(), adj_missing, tiles.size(), _hat_peak_filled])
+	if adj_bogus > 0:
+		ok = false
+	if adj_missing > 0 and _hat_peak_filled == 0:
 		ok = false
 	# 低度格子（度 ≤3）逐个点名：它们才是「边界上容易被围死」的候选。
 	# 判据：度 2 的格子只需要对方两手就能做死；度 ≤1 是几何缺陷。
@@ -5969,95 +6185,10 @@ func _anlz_real() -> void:
 	print("[anlzreal] ★ 「名次差×1.5 分」是**粗估**（未实测每名分差），只判断量级。")
 	get_tree().quit(0)
 
-## 自检（--anlzdose）`w_rescue_own_live` 的**剂量-响应扫描**（确定性，秒级）。
-##
-## 技能 Part 11：剂量参数必须扫到**饱和**，取**最小有效剂量**。
-## 只报 argmax 变没变是不够的 —— 那分不出「剂量不够」与「方向错」。
-## ⇒ 打印每个剂量下「要点点的排名 / 与冠军的分差」，两者能区分这两件事。
-func _anlz_dose() -> void:
-	print("[anlzdose] ===== 救活权重剂量-响应（确定性，先验层面）=====")
-	reset_game(true)
-	_test_build_square_grid(TEST_GRID_N)
-	ai_engine.setup(adjacency, Stone.WHITE)
-	ai_engine.ld_enabled = true
-	var shape: Dictionary = {}
-	for cs: Dictionary in _ld_shape_table():
-		if String(cs.get("n", "")) == "丁四":
-			shape = cs
-			break
-	if shape.is_empty():
-		print("[anlzdose] ✗ 找不到丁四 ⇒ 无法自测")
-		get_tree().quit(1)
-		return
-	# ★★★ 工作点（铁律 4 / 技能 Part 11）：裸眼形**本来就被基线选成冠军**
-	#   （实测要点 101 = argmax，全部剂量「第 1 名」）⇒ 无病可治，判据恒假。
-	#
-	# ★★ 造干扰项的**两次失败**（写在这避免后人重踩）：
-	#   ① 在眼形旁放被围死的黑子 ⇒「要点共 0 个」。
-	#   ② 挪到远处 (11,2) ⇒ 仍然「要点共 0 个」。
-	#   根因（读 `_eye_rep_at` 得到）：它要求该空区的边界**全部同色**，
-	#   而 19×19 空盘上任何一颗子都会让大空区边界混色 ⇒ 要点判定直接失效。
-	#   ⇒ ★ **不能靠加子造工作点**。
-	#   正解：把 `w_center`（中心偏好，真源项）压低 —— 远离中心的非要点点基线分下降，
-	#   要点相对上升 ⇒ 基线不再选它 ⇒ 加成有机会把它抬回来。
-	#   这是**只动权重、不动控制流**的干预（技能 14.3 的纪律）。
-	var sv_center := ai_engine.w_center
-	ai_engine.w_center = 0.0
-	_lay_eye_shape_with_libs(shape["pts"], Vector2i(5, 5), Stone.WHITE, Stone.BLACK, 0)
-	#★★ 必须先把盘面交给引擎再查要点！
-	#   `_eye_vital_flags` 读的是引擎内部的 `_b` / `_ld_pts`，不是 `board`。
-	#   症状：「要点共 0 个」—— 而**同一夹具**在 `--anlzprobe` 下要点是有的（点 101）。
-	#   差别：probe 在查要点前调过 `probe_root_argmax()`（内部 `load_board_for_probe`）
-	#   ⇒ 引擎已是这块盘；dose 直接调 ⇒ 引擎还在**上一张盘** ⇒ 判定全 false。
-	#   （技能 Part 13：「夹具换盘后必须把新图交给引擎」——我把它误当成只对 setup 生效。）
-	ai_engine.load_board_for_probe(board)
-	ai_engine._turn = int(Stone.WHITE)
-	ai_engine.use_analyze_bonus = false
-	var vital: Array = []
-	for v in board.size():
-		if int(board[v]) != int(Stone.EMPTY):
-			continue
-		if bool(ai_engine._eye_vital_flags(v)[1]):
-			vital.append(v)
-	print("[anlzdose] 夹具：丁四眼形 + 一颗被围死的黑子（制造「更强的假候选」）")
-	print("[anlzdose] 要点共 %d 个：%s" % [vital.size(), str(vital)])
-	if vital.is_empty():
-		print("[anlzdose] ✗ 本局面没有要点 ⇒ 夹具失败（不该发生）")
-		get_tree().quit(1)
-		return
-	var v0 := int(vital[0])
 
-	# 基线排名（加成关）
-	var base_rank := _rank_of(board, v0, 0.0)
-	print("[anlzdose] 基线：要点的排名 = 第 %d 名（1 = 冠军）" % base_rank)
-	if base_rank <= 1:
-		print("[anlzdose] ★ 基线已经把要点选成冠军 ⇒ 仍是「无病可治」的工作点")
-		print("[anlzdose]      ⇒ 这个夹具也不合格，需要更强的干扰项")
-	else:
-		print("[anlzdose] ★ 工作点合格：要点被压在第 %d 名 ⇒ 加成有机会把它抬上来" % base_rank)
-
-	var doses := [0.0, 4.0, 8.0, 12.0, 18.0, 25.0, 40.0, 60.0, 90.0, 130.0]
-	var first_effective := -1.0
-	var prev := 999
-	var mono_ok := true
-	print("[anlzdose] %-7s %-10s %-10s" % ["剂量", "要点排名", "是否夺冠"])
-	for d: float in doses:
-		var rk := _rank_of(board, v0, d)
-		var win := rk <= 1
-		print("[anlzdose] %-7.0f %-10d %-10s" % [d, rk, "是 ✓" if win else "否"])
-		if win and first_effective < 0.0:
-			first_effective = d
-		if rk > prev:
-			mono_ok = false
-		prev = rk
-	ai_engine.w_rescue_own_live = 18.0
-	ai_engine.w_center = sv_center
-	ai_engine.use_analyze_bonus = true
-	print("[anlzdose] 最小有效剂量 = %s" % ["%.0f" % first_effective if first_effective >= 0 else "★全部剂量都无效"])
-	print("[anlzdose] 剂量-响应单调不降 = %s%s"
-			% ["✓" if mono_ok else "✗（★有交互项或符号错）",
-			   "" if first_effective >= 0 else "（且从未夺冠 ⇒ 方向或机制有 bug）"])
-	get_tree().quit(0)
+# ⚰️ 2026-11-02 墓碑（名字不许回收）：`_anlz_dose()`（`--anlzdose`）已删除。
+#   完整理由见下面 `_anlz_probe()` 那块的墓碑（同一轮、同一族夹具病）。
+#   共用的 `_rank_of()` **保留**：它还有读者（`_anlz_mis()`）。
 
 ## 点 `v` 在「加了 `bonus` 分」之后的排名（1 = 冠军）。走 `probe_root_score_last`（确定性）。
 func _rank_of(bd: Dictionary, v: int, bonus: float) -> int:
@@ -6075,116 +6206,17 @@ func _rank_of(bd: Dictionary, v: int, bonus: float) -> int:
 			return i + 1
 	return 999
 
-## 自检（--anlzprobe）局势层的**确定性机制探针**（秒级、无搜索、无随机）。
-##
-## 验的是「三个新权重在先验层面真的在动，且方向正确」，**不是**棋力。
-## 分层验证（技能 Part 5）：机制确定性 → 棋力用 `--aitune` 对打。
-##
-## 关键：走 `probe_root_argmax()`（确定性）而**不是** `choose_move()`（有时间预算+线程+随机）。
-func _anlz_probe() -> void:
-	print("[anlzprobe] ===== 局势层机制探针（确定性，先验层面）=====")
-	print("[anlzprobe] 判据① 开/关 argmax 必须不同；且三权重全 0 时两者必须相同")
-	print("[anlzprobe] 判据② 方向：要点上的加成 > 非要点；被围地上的加成 < 0")
-	print("[anlzprobe] 判据③ 阴性对照：关掉后逐点加成恒为 0")
-	reset_game(true)
-	_test_build_square_grid(TEST_GRID_N)
-	ai_engine.setup(adjacency, Stone.WHITE)
-	ai_engine.ld_enabled = true
 
-	# ★★ 夹具必须有子！第一版**只建了空网格** ⇒ 361 个空点加成全0（判据红的是夹具，
-	#   不是机制）。三道门槛的输入全在「盘上有子」的域里：① 要未定形块的眼位要点、
-	#   ② 要邻接对方死块、③ 要被对方同色包围的空区。
-	# 摆一个**未定形**眼形（真源 st=1：直三/弯三/丁四/梅花五/刀把五）——
-	#   它的眼位空间里必然有要点 ⇒ ① 有机会触发。
-	# ★ `ring_color` 才是「有眼位的那块」⇒ 必须等于 ai_color（WHITE），
-	#   否则测的是对方的块（`_eye_vital_flags` 只给己方奖励）。
-	# 用真源表里的形名，**不硬编码坐标**（铁律 18：真源只一份）。
-	var shape: Dictionary = {}
-	for cs: Dictionary in _ld_shape_table():
-		if String(cs.get("n", "")) == "丁四":     # 真源 st=1（未定形），4 点
-			shape = cs
-			break
-	if shape.is_empty():
-		print("[anlzprobe] ✗ 找不到丁四（真源表变动）⇒ 本探针无法自测")
-		get_tree().quit(1)
-		return
-	_lay_eye_shape_with_libs(shape["pts"], Vector2i(5, 5), Stone.WHITE, Stone.BLACK, 0)
-	print("[anlzprobe] 夹具：丁四（真源 st=1 未定形），ring=白 墙=黑，封闭眼形")
-	var b_on := ai_engine.probe_root_argmax(board, int(Stone.WHITE))
-	ai_engine.use_analyze_bonus = true
-	var b_off := ai_engine.probe_root_argmax(board, int(Stone.WHITE))
-	ai_engine.use_analyze_bonus = false
-	# 阳性对照：把三个权重全部置 0（「等效于关掉」但走的是另一条代码路径）
-	var sv := [ai_engine.w_rescue_own_live, ai_engine.w_capture_dead, ai_engine.w_sealed_territory]
-	ai_engine.w_rescue_own_live = 0.0
-	ai_engine.w_capture_dead = 0.0
-	ai_engine.w_sealed_territory = 0.0
-	var b_zero := ai_engine.probe_root_argmax(board, int(Stone.WHITE))
-	ai_engine.w_rescue_own_live = sv[0]
-	ai_engine.w_capture_dead = sv[1]
-	ai_engine.w_sealed_territory = sv[2]
-	ai_engine.use_analyze_bonus = true
-
-	var fail: Array = []
-	var arg_on := int(b_on.get("best", -1))
-	var arg_off := int(b_off.get("best", -1))
-	var arg_zero := int(b_zero.get("best", -1))
-	print("[anlzprobe] argmax：加成开=%d 关=%d 三权重置0=%d" % [arg_on, arg_off, arg_zero])
-	print("[anlzprobe] ① 开/关 %s；置0/关 %s"
-			% ["不同 ✓" if arg_on != arg_off else "★相同 ⇒ 机制是装饰",
-			   "相同 ✓（差异确实来自这三项）" if arg_zero == arg_off else "★不同 ⇒ 差异另有来源"])
-	if arg_on == arg_off:
-		fail.append("开/关 argmax 相同 ⇒ 局势加成在先验层面没起作用")
-
-	# —— 逐点加成明细：方向判据②③——
-	var n_pos := 0
-	var n_neg := 0
-	var n_zero_add := 0
-	var vital_add := -1.0e9
-	var plain_add := -1.0e9
-	for v in board.size():
-		if int(board[v]) != int(Stone.EMPTY):
-			continue
-		ai_engine.use_analyze_bonus = false
-		var a_off := ai_engine._analyze_bonus(v)
-		ai_engine.use_analyze_bonus = true
-		var a_on := ai_engine._analyze_bonus(v)
-		if absf(a_off) > 1e-9:
-			fail.append("阴���对照失效：关掉后 v=%d 加成仍=%.3f" % [v, a_off])
-		if absf(a_on) < 1e-9:
-			n_zero_add += 1
-			continue
-		if a_on > 0.0:
-			n_pos += 1
-		else:
-			n_neg += 1
-		# 是不是做活要点（唯一真源口径）
-		if bool(ai_engine._eye_vital_flags(v)[1]):
-			vital_add = maxf(vital_add, a_on)
-		else:
-			plain_add = maxf(plain_add, a_on)
-	ai_engine.use_analyze_bonus = true
-	print("[anlzprobe] 逐点加成：正 %d 个 / 负 %d 个 / 零 %d 个（空点共 %d）"
-			% [n_pos, n_neg, n_zero_add, _count_empty()])
-	print("[anlzprobe] ② 要点上最大加成=%.1f｜非要点最大加成=%.1f ⇒ %s"
-			% [vital_add, plain_add,
-			   "要点更高 ✓" if vital_add > plain_add else "★要点不高于非要点"])
-	if n_neg == 0:
-		fail.append("没有任何点拿到负加成 ⇒ w_sealed_territory 在这个形状上从未触发")
-	if n_pos == 0:
-		fail.append("没有任何点拿到正加成 ⇒ 救活/抢死子在这个形状上从未触发")
-	print("[anlzprobe] ③ 阴性对照（关掉后恒 0）%s"
-			% ("✓" if fail.is_empty() or not String(fail[0]).begins_with("阴性") else "✗"))
-	print("[anlzprobe] 失败 %d 项：%s" % [fail.size(), str(fail)])
-	print("[anlzprobe] 结论：%s" % ("通过 ✓" if fail.is_empty() else "失败 ✗"))
-	get_tree().quit(0 if fail.is_empty() else 1)
-
-func _count_empty() -> int:
-	var c := 0
-	for i in board.size():
-		if int(board[i]) == int(Stone.EMPTY):
-			c += 1
-	return c
+# ⚰️ 2026-11-02 墓碑（名字不许回收）：`_anlz_probe()`（`--anlzprobe`）/
+#   `_anlz_dose()`（`--anlzdose`）/ 私有辅助 `_count_empty()` 已删除。
+#   三者都是 2026-10-07「局势层权重」那轮的**一次性机制 / 剂量探针**，夹具本身不合格：
+#   · `--anlzprobe` 判据① 要「开 / 关 argmax 必须不同」，但夹具（丁四眼形 + 被围黑子）
+#     里要点 101 本来就是先验 argmax ⇒ 加成「无需生效」⇒ 判据恒假（红了三个月没人看见，
+#     因为它不在任何回归清单里）；
+#   · `--anlzdose` 自己就印着「基线已经把要点选成冠军 ⇒ 仍是「无病可治」的工作点」。
+#   ⇒ 它们在如实报告「测不出东西」，但那种输出与「跑过且通过」在汇总里长得太像。
+#   那轮结论已固化：influence 是承重墙（80.6% / 84.4%）、`dead_zone`/`soft_lap` 拨不动、
+#   算力已饱和 ⇒ 见 hard_findings #4 #8。要重新扫剂量请**新写**仪器，别捞这条。
 
 ## 局势字段（**生产端**）：`music.gd` 通过 `sc.get("an_crisis")` 这类**反射**读取，
 ## 所以必须是**成员变量**，函数读不到（踩过：`music_battle_extra()` 写成函数 ⇒ 音乐恒取默认 0）。
@@ -7501,6 +7533,14 @@ func replay_apply_board_spec(rec: Dictionary) -> void:
 		GameConfig.board_type = bt
 	if bs >= 0:            # ⚠️ 0 是合法值（RANDOM），判据必须是 `>= 0` 不是 `> 0`
 		GameConfig.board_size = bs
+	# ★★ 2026-11-06：随机形状位 + **重算几何参数**。
+	#   为什么必须重算：`_ready()` 里 `_apply_board_size()` 早在**本函数之前**就按"菜单选的那个
+	#   档"跑过了（第 615 行附近）；本函数刚刚改了 `board_size`/`board_random_shape`，
+	#   不重算就还是菜单那套迭代次数/环数/层数/目标格数 ⇒ 生成的盘与谱头不符。
+	#   （这条在随机形状上尤其致命：`_rand_target_override` 就写在 `_apply_board_size()` 里。）
+	if bt >= 0:
+		GameConfig.board_random_shape = bool(rec.get("board_random", false))
+		_apply_board_size(GameConfig.board_size)
 	# ⚠️ 刻意**拿局部变量**调，不写成 `replay_lock_seed(int(rec.get("board_seed", -1)))`：
 	#   `replay_enter()` 里有**逐字相同**的一行，而结构守卫的 `replay_seed_lock` 标记
 	#   要求**恰好命中 1 次**（S46c 用它守"先钉种子再校验指纹"）⇒ 写一样就命中 2 次 ⇒ 假红。
@@ -7777,6 +7817,12 @@ func _record_test() -> void:
 
 	GameConfig.board_type = GameConfig.BOARD_PENROSE
 	GameConfig.board_size = GameConfig.RANDOM
+	# ★★ 2026-11-06：**按档位落几何**。漏这一步造出来的谱是「s=0(RANDOM) 但彭罗斯迭代/裁剪
+	#   仍是上一步那档的」—— 一份真对局里不可能出现的谱。以前不影响判据是因为
+	#    也不重算；本轮让它重算（真实路径的正确做法）之后，
+	#   这份脏谱就与"重算过的引擎状态"对不上 ⇒ 后面的 ⑪（进复盘）连带红。
+	#   ⇒ 修造谱侧，让它像真对局一样落几何。
+	_apply_board_size(GameConfig.RANDOM)
 	komi = 7
 	game_mode = VS_AI
 	_rand_seed = 20261003
@@ -8230,6 +8276,12 @@ func _replay_browse_test() -> void:
 
 	GameConfig.board_type = GameConfig.BOARD_PENROSE
 	GameConfig.board_size = GameConfig.RANDOM
+	# ★★ 2026-11-06：**按档位落几何**。漏这一步造出来的谱是「s=0(RANDOM) 但彭罗斯迭代/裁剪
+	#   仍是上一步那档的」—— 一份真对局里不可能出现的谱。以前不影响判据是因为
+	#    也不重算；本轮让它重算（真实路径的正确做法）之后，
+	#   这份脏谱就与"重算过的引擎状态"对不上 ⇒ 后面的 ⑪（进复盘）连带红。
+	#   ⇒ 修造谱侧，让它像真对局一样落几何。
+	_apply_board_size(GameConfig.RANDOM)
 	komi = 7
 	game_mode = VS_AI
 	_rand_seed = 20261004
@@ -8505,6 +8557,12 @@ func _replay_browse_test() -> void:
 	# ① 先在**另一种盘**上造一份真谱 —— 盘型**和**尺寸都与当前不同
 	GameConfig.board_type = GameConfig.BOARD_KITE
 	GameConfig.board_size = other_bs
+	# ★★ 2026-11-06：**必须**按档位重算几何。原来漏了这一行，于是造出来的谱是
+	#   "s=ENHANCED 但彭罗斯迭代/裁剪仍是 STANDARD 那套"—— 一份**真对局里不可能存在**的谱。
+	#   它以前能过，是因为 `replay_apply_board_spec()` 也没重算几何 ⇒ 两边一起错、指纹恰好对上。
+	#   本轮让复盘按谱头重算（真实路径的正确做法）之后，这份脏谱就对不上了 ⇒ 判据红。
+	#   ⇒ 修**造谱侧**（让它像真对局一样落几何），不是把复盘那行撤掉。
+	_apply_board_size(other_bs)
 	_rand_seed = 0
 	generate_board()
 	reset_game(true)
@@ -8518,6 +8576,7 @@ func _replay_browse_test() -> void:
 	# ② 切回原盘 —— 此刻引擎站在"菜单当前那张盘"上，与 `other_rec` 声明的盘**不同**
 	GameConfig.board_type = bt_here
 	GameConfig.board_size = bs_here
+	_apply_board_size(bs_here)          # ★ 与造谱侧对称：切回原盘也要落几何
 	_rand_seed = seed_here
 	generate_board()
 	reset_game(true)
@@ -8543,6 +8602,7 @@ func _replay_browse_test() -> void:
 	# ④ 复原（**含删掉这份临时谱** —— 判据不许往盘里堆垃圾）
 	GameConfig.board_type = bt_here
 	GameConfig.board_size = bs_here
+	_apply_board_size(bs_here)          # ★ 与造谱侧对称：切回原盘也要落几何
 	_rand_seed = seed_here
 	generate_board()
 	reset_game(true)
@@ -8558,7 +8618,10 @@ func _replay_browse_test() -> void:
 	var ui_entered: bool = replay_enter(back)
 	if not ui_entered:
 		ok = false
-		print("[browsetest] ⑪ 交互层判据无法进行：进复盘的入口就失败了")
+		print("[browsetest] ⑪ 交互层判据无法进行：进复盘的入口就失败了｜谱 fp=%s 当前 fp=%s 谱 t=%d/s=%d 当前 t=%d/s=%d" % [
+				str(back.get("generator_fingerprint", "")), _record_generator_fp(),
+				int(back.get("board_type", -1)), int(back.get("board_size", -1)),
+				GameConfig.board_type, GameConfig.board_size])
 
 	# ---- ⑪a 工具条齐备 + 布局在视口内（当前档：期望值按谓词取）----
 	# ★ 有效分母 = 按钮数：空数组上"每个按钮都在视口内"是**空集合上的判据**（恒真）。
@@ -9251,63 +9314,15 @@ func _first_playable() -> int:
 			return i
 	return -1
 
-## 自检（--aiterr）：终局评估质量探针 —— 诊断大盘棋力问题的核心工具。
-##
-## 背景：19×19 有 361 格，而 `_effective_playout_cap()` 返回 `min(n, 160)`，
-## rollout 只下到 **44% 填充率**就被截断。此时大片空区边界黑白都有子，
-## 传统「完全被单色围住才计分」一律判中立 → **面积分退化成纯子数差**，
-## AI 完全学不到「围空」，只会往盘上堆子。彭罗斯 120 格能下满，所以小盘看不出这个病。
-##
-## 本探针把退化直接量出来：同一局面分别「下到截断上限」与「下满」，
-## 比较两处算出的分差。判据是**截断处评估与终局真值的绝对误差**
-## —— 评估若可靠，中盘就该能看出谁领先。
-func _ai_territory_probe() -> void:
-	ai_engine.setup(adjacency, AI_COLOR)
-	var cap: int = ai_engine._effective_playout_cap()
-	var tn: int = tiles.size()
-	print("[aiterr] 棋盘=%s 格数=%d | rollout 上限=%d → 填充率上限=%.0f%%" % [
-		_board_size_name(GameConfig.board_size), tn, cap,
-		100.0 * float(cap) / float(maxi(tn, 1))])
-	var cases := 8
-	var last_err_old := 0.0
-	var last_err_new := 0.0
-	# 扫三档截断长度：引擎默认 / 1.5 倍 / 下满。看「多下一点」到底能挽回多少评估误差 ——
-	# 这是判断「该改评估函数还是该加长 rollout」的直接依据
-	var caps: Array[int] = [cap, int(cap * 1.5), tn]
-	for c in caps:
-		var ag_old := 0
-		var ag_new := 0
-		var err_old := 0.0
-		var err_new := 0.0
-		var fill := 0.0
-		for s in cases:
-			var mv0: int = 24 + s * 9
-			var seed: int = 1234 + s * 77
-			var a: Dictionary = ai_engine.probe_eval_quality(mv0, seed, c)
-			var truth := float(a["score_true"])
-			var so := float(a["score_old"])
-			var sn := float(a["score_new"])
-			var oko: bool = (so > 0) == (truth > 0)
-			var okn: bool = (sn > 0) == (truth > 0)
-			if oko:
-				ag_old += 1
-			if okn:
-				ag_new += 1
-			err_old += absf(so - truth)
-			err_new += absf(sn - truth)
-			fill += float(a["fill1"])
-		print("[aiterr] 截断=%3d 填充=%.0f%% | 符号一致率 旧=%d/%d 新=%d/%d ｜ 平均绝对误差 旧=%.1f 新=%.1f" % [
-			c, 100.0 * fill / float(cases),
-			ag_old, cases, ag_new, cases,
-			err_old / float(cases), err_new / float(cases)])
-		last_err_old = err_old
-		last_err_new = err_new
-	# 断言：截断发生时（大盘）影响力评估必须更接近真值
-	var ok := true
-	if cap < tn:
-		ok = last_err_new < last_err_old
-	print("[aiterr] 结论：", "通过 ✓" if ok else "失败 ✗ 影响力评估未改善")
-	get_tree().quit()
+
+# ⚰️ 2026-11-02 墓碑（名字不许回收）：`_ai_territory_probe()`（`--aiterr`）已删除。
+#   它是 19×19 时代的诊断器，量的是「rollout 被截断 ⇒ 面积分退化成纯子数差」这个病：
+#   `_effective_playout_cap()` 返回 `min(n, 160)`，19×19 只下到 44% 填充率，空区一律判中立。
+#   ★ 删它的理由不是「结论错了」，而是**它在现有盘型上测不出东西**：
+#     彭罗斯 120 格能下满 ⇒ `cap == tn` ⇒ 唯一那条断言 `if cap < tn:` 整段跳过，
+#     打出来的 `结论：通过 ✓` 是恒真假绿（历史登记见 `orphan_registry.tsv`）。
+#   要重新量这个病，得先有能复现 cap<tn 的盘型；那时的正确做法是新写一个**带分母判据**
+#   的仪器（`cap >= tn` 就直接报红「测不到」），而不是把这条捞回来。
 
 
 ## 自检（--ailam）：给 AlphaGo 式 λ 混合定理论最优 λ。
@@ -10242,6 +10257,11 @@ func _aigraph_probe() -> void:
 	var pw_p: int = 150
 	var pw_t: int = 600
 	var base_seed: int = 20261023
+	# 老师与陪练的**引擎种类**（2026-11-05）。默认 `rock` = 历史口径逐位不变。
+	# ★ 为什么放开老师：原来 `teacher` 写死 `AIEngine.new()` ⇒ 训练标签只能是磐石的选点。
+	#   而 11-04 实测流水对磐石 **28:0**（16:0 @m400 + 12:0 @m260）⇒ 学生一直在跟二流老师学。
+	var teacher_kind: String = "rock"
+	var pol_kind: String = "rock"
 	var bts: Array[int] = []
 	# `--aigraph=` 正好 10 个字符（`--` + `aigraph`(7) + `=`）⇒ 从 10 切。
 	# ⚠ 与 `--liudiag`（10）/`--liudrill`（11）同一条纪律：长度是硬编码字面量，差一位就静默错位（§109）。
@@ -10264,6 +10284,10 @@ func _aigraph_probe() -> void:
 				pw_t = int(val)
 			elif k == "s":
 				base_seed = int(val)
+			elif k == "teacher":
+				teacher_kind = val.to_lower()
+			elif k == "pol":
+				pol_kind = val.to_lower()
 			elif k == "bt":
 				for nm in val.split(",", false):
 					var b: int = _aigraph_bt(nm)
@@ -10273,7 +10297,7 @@ func _aigraph_probe() -> void:
 						return
 					bts.append(b)
 			else:
-				print("[aigraph] ✗ 未知 token：「%s」（支持 g=/every=/max=/pp=/pt=/s=/bt=）" % tok)
+				print("[aigraph] ✗ 未知 token：「%s」（支持 g=/every=/max=/pp=/pt=/s=/bt=/teacher=/pol=）" % tok)
 				get_tree().quit(1)
 				return
 	if bts.is_empty():
@@ -10283,18 +10307,26 @@ func _aigraph_probe() -> void:
 	# （名字不含 "test" ⇒ 不走 `is_automated_run()` 的自动改道，必须手动静音。）
 	_record_muted = true
 
-	var teacher := AIEngine.new()
-	var pol_b := AIEngine.new()
-	var pol_w := AIEngine.new()
-	teacher.threads = 1
-	teacher.time_budget_ms = 30000        # 真正兜底的是 max_playouts
-	teacher.max_playouts = maxi(pw_t, 1)
-	for e in [pol_b, pol_w]:
-		e.threads = 1
-		e.time_budget_ms = 30000
-		e.max_playouts = maxi(pw_p, 1)
+	# 引擎按**种类**造（`pol=` / `teacher=`）；默认 rock ⇒ 与历史口径逐位相同。
+	# ⚠️ 用 `Variant` 而不是 `Object` 显式标注：三者的 `setup()` / `choose_move()`
+	#   是**动态派发**的，标成 `Object` 在编译期就找不到这两个方法。
+	var teacher: Variant = _aigraph_make(teacher_kind, pw_t)
+	var pol_b: Variant = _aigraph_make(pol_kind, pw_p)
+	var pol_w: Variant = _aigraph_make(pol_kind, pw_p)
+	if teacher == null or pol_b == null or pol_w == null:
+		print("[aigraph] ✗ 引擎种类不支持：teacher=%s pol=%s"
+			% [teacher_kind, pol_kind]
+			+ "（支持 rock/flow/yema；**xg 不行** —— 它不是引擎对象）")
+		get_tree().quit(1)
+		return
+	print("[aigraph] 老师=%s（pt=%d）｜陪练=%s（pp=%d）｜every=%d max=%d｜%d 局 × %d 盘"
+		% [teacher_kind, pw_t, pol_kind, pw_p, every, max_moves, games, bts.size()])
 
-	print("GNN,H,1,%d,state=char01black2white;edges=u<v;color=next-to-move;ko=-1=none" % bts.size())
+	# ★ 口径头里必须写 `teacher=`：它是**标签定义**的一部分（换老师 = 换训练目标）。
+	#   `nn_data.py::_add_header()` 会把它当语义字段 ⇒ 与 `teacher=rock` 的老数据
+	#   自动判成不同口径、拒绝静默合并（§136：标签同源的反面就是静默混训）。
+	print("GNN,H,1,%d,state=char01black2white;edges=u<v;color=next-to-move;ko=-1=none;teacher=%s"
+		% [bts.size(), teacher_kind])
 	var gid := 0
 	for bt in bts:
 		# ★ tid 必须是**与盘型绑定的稳定值**，不能用自增计数器：
@@ -10331,7 +10363,9 @@ func _aigraph_probe() -> void:
 					if tv < 0 or tv >= n or board[tv] != Stone.EMPTY or tv == ko_point:
 						tv = -1
 					print("GNN,L,%d,%d,%d" % [gid, moves, tv])
-				var eng := pol_b if tc == Stone.BLACK else pol_w
+				# ※ 必须写死 `Variant`：`:=` 从 Variant 推导会触发
+				#   "The variable type is being inferred from a Variant value"（本工程把它当错误）
+				var eng: Variant = pol_b if tc == Stone.BLACK else pol_w
 				var mv: int = eng.choose_move(board, ko_point, tc)
 				if mv < 0 or mv >= n or board[mv] != Stone.EMPTY or mv == ko_point:
 					passes += 1
@@ -10352,6 +10386,35 @@ func _aigraph_probe() -> void:
 				winner = 2
 			print("GNN,G,%d,%d,%d,%d,%d,%d" % [gid, tid, winner, tb, tw, moves])
 	get_tree().quit()
+
+
+## `--aigraph` 的**引擎工厂**（`pol=` / `teacher=`，2026-11-05）。
+## ★ 放开老师的理由：原来 `teacher` 与 `pol_b/pol_w` 都写死 `AIEngine.new()` ⇒ 训练标签
+##   只能是磐石的选点；而 11-04 实测流水对磐石 **28:0** ⇒ 学生一直在跟二流老师学。
+## ⚠️ `xg` 不支持：它不是引擎对象（走 `game.gd` 自己的 `_xg_choose_move()`，
+##   没有独立实例 ⇒ 没法同时当"我方"和"对方"）。
+## ⚠️ 流水的 `time_budget_ms` 不能给 30000：它的成本由 `prefilter_width`/`root_width`/
+##   `iters_*` 决定（200ms 预算下实测只用 42ms ⇒ 它根本碰不到时间闸）。给个大数当安全带，
+##   万一在 360 格大盘上触闸，30000 会让单局跑到几十分钟。
+func _aigraph_make(kind: String, playouts: int) -> Variant:
+	match kind:
+		"rock":
+			var e := AIEngine.new()
+			e.threads = 1
+			e.time_budget_ms = 30000        # 真正兜底的是 max_playouts
+			e.max_playouts = maxi(playouts, 1)
+			return e
+		"flow":
+			var f := LiushuiAI.new()
+			f.time_budget_ms = 1000
+			f.max_playouts = maxi(playouts, 1)   # 只当 prefilter 的上限钳制
+			return f
+		"yema":
+			var y := YemaAI.new()
+			y.threads = 1
+			y.time_budget_ms = 30000
+			return y
+	return null
 
 
 ## `--aigraph` 的盘型名 → GameConfig 枚举；未知返回 -1（由调用方报错退出）。
@@ -10750,52 +10813,83 @@ func _apprt_back_to_menu() -> void:
 		await get_tree().process_frame
 	Transition.change_scene("res://menu.tscn")
 
+## ====== 尺寸三档 → 五张盘各自的落地参数（**唯一阶梯真源**）======
+## ★★ 2026-11-06 用户口令「统一所有棋盘格数，全部对标常规棋盘的 9*9 13*13 19*19」：
+##   三档现在就是 **9×9 / 13×13 / 19×19 = 81 / 169 / 361 格**，各盘在自己的阶梯里
+##   （环数/层数/裁剪半径都是离散量，只能就近取）挑最接近那一档的一格：
+##
+##   | 盘     | 小 9×9=81 | 中 13×13=169 | 大 19×19=361 |
+##   |--------|-----------|--------------|--------------|
+##   | 彭罗斯  | it4 r.66→80 | it5 r.60→170 | it5 r.88→360 |
+##   | 立方体  | 环2 → 57   | 环4 → 183    | 环6 → 381    |
+##   | 筝形    | 环2 → 72   | 环3 → 162    | 环4 → 288    |
+##   | 雪花    | 层3 → 72   | 层4 → 144    | 层7 → 408    |
+##   | 爱因斯坦| 81 → 77    | 169 → 159    | 361 → 331    |
+##
+##   ↑ 表里"→ N"是**实测落子格数**（2026-11-06 用一次性探针跑出来的，见 `--netboardtest` ⑧
+##     每次回归都会重新实测这 15 个数；改任何一格都要重跑它，别照抄注释）。
+##   ★ 为什么必须就近而不是精确：环数/层数是**整数**，格数只能跳着取
+##     （立方体 环2=57、环3=111 —— 81 夹在中间，只能二选一）。
+##   ★★ 这张阶梯以前有**两份**：`--netboardtest` 的 `SIZE_TIERS` 里带 per-board 覆盖键
+##     （`cube_r`/`kite_r`/`snow_r`/`hat_tiles`），而本函数另有一份 —— 两份必然分家
+##     （11-05 就为了"爱因斯坦三档只差 9.7%"在表里加过 `hat_tiles`）。现在只剩本函数一份，
+##     `SIZE_TIERS` 只记"哪一档 + 该档格数带"，per-board 覆盖键全部删除。
 func _apply_board_size(size_id: int) -> void:
-	# 立方体盘：环数（随机 → 由生成器按目标格数生长、这里只占位 / 标准 4 / 加强 6）
-	# → 61/127 个六边形 → 183/381 落子格；随机档的 _cube_hex_r 在生成后回填为实际环数
+	# 立方体盘：环数（随机 → 由生成器按目标格数生长、这里只占位）
+	# → 环 r 的蜂窝是 3r(r-1)+1 个六边形；落子格 = 2×六边形数
 	match size_id:
 		GameConfig.RANDOM: _cube_hex_r = 0
-		GameConfig.ENHANCED: _cube_hex_r = 6
-		_: _cube_hex_r = 4
-	# 筝形盘：正六边形**环数 R**（迷你 2 / 标准 3 / 加强 4）
+		GameConfig.SMALL: _cube_hex_r = 2          # 57 格
+		GameConfig.ENHANCED: _cube_hex_r = 6       # 381 格
+		_: _cube_hex_r = 4                         # 183 格
+	# 筝形盘：正六边形**环数 R**
 	# → 正六边形选区在三角形级取样：R=2 → 24 个三角形 / 72 落子格；
 	#   R=3 → 54 / 162；R=4 → 96 / 288。边界是严格正六边形（六条边各 R 条单位边）。
-	# 筝形无随机档：全局 RANDOM 槽位在筝形下即「迷你」固定盘（菜单槽位 0 显示「迷你」）。
+	# ★ 筝形没有随机档：RANDOM 槽位在它下面仍是「迷你」固定盘（旧棋谱/命令行可能带 0 进来）。
 	match size_id:
 		GameConfig.RANDOM: _kite_r_actual = 2
-		GameConfig.ENHANCED: _kite_r_actual = 4
-		_: _kite_r_actual = 3
+		GameConfig.SMALL: _kite_r_actual = 2       # 72 格（与旧的「迷你」同一张盘）
+		GameConfig.ENHANCED: _kite_r_actual = 4    # 288 格
+		_: _kite_r_actual = 3                      # 162 格
 	# 雪花盘：**层数 n**（octagrid 圆窗半径 R = 0.75n）。
-	# 实测格数阶梯：n=3→72（迷你）/ n=5→200（标准）/ n=6→296（加强）。
-	# 雪花 2026-09-16 起**有随机档**：RANDOM 槽位下 _snow_r_actual 不参与生成
+	# 实测格数阶梯：n=3→72 / n=4→144 / n=5→200 / n=6→296 / n=7→408。
+	# 雪花**有随机档**：RANDOM 槽位下 _snow_r_actual 不参与生成
 	#（半径由目标格数现算，见 _generate_snowflake_random），这里的值只作占位。
+	# ★ 中档取 4 层（144，比 5 层的 200 更接近 169）；大档取 7 层（408，比 6 层的 296 更接近 361）。
 	match size_id:
 		GameConfig.RANDOM: _snow_r_actual = 3
-		GameConfig.ENHANCED: _snow_r_actual = 6
-		_: _snow_r_actual = 5
+		GameConfig.SMALL: _snow_r_actual = 3       # 72 格
+		GameConfig.ENHANCED: _snow_r_actual = 7    # 408 格
+		_: _snow_r_actual = 4                      # 144 格
 	# 爱因斯坦盘（帽子家族）：**没有可连续调节的几何参数**（盘 = 池 + BFS 收 N 片），所以「尺寸档」
-	# 直接就是目标落子格数：标准 hat_std_tiles（150）/ 加强 hat_big_tiles（310）；随机档用
-	# 爱因斯坦专用的 hat_rand_tiles ± random_tile_jitter（默认 270±12，2026-09-20 用户口径
-	# 「三种类随机盘 240~300 格」，与其它盘共用的 random_target_tiles 分开）。
-	# ★ 2026-09-19 起菜单里**爱因斯坦这个槽位不再出尺寸行**，那一行改成选种类（帽子/海龟/幽灵），
-	#   且三种类都走随机档（用户口径：「都是随机约200格」）→ 菜单永远只写 board_size = RANDOM。
-	#   标准/加强两档在代码里保留，只留给自检（--hattest ④ 的确定性盘）与命令行截图用。
+	# 直接就是目标落子格数：小 hat_small_tiles / 中 hat_std_tiles / 大 hat_big_tiles；
+	# 随机档用爱因斯坦专用的 hat_rand_tiles ± random_tile_jitter。
+	# ★ 削峰会再抠掉约 8~9% 的高气数落子点 ⇒ 目标 81/169/361 实测 77/159/331（这就是"就近"的余量）。
 	match size_id:
 		GameConfig.RANDOM: _hat_target = hat_rand_tiles
+		GameConfig.SMALL: _hat_target = hat_small_tiles
 		GameConfig.ENHANCED: _hat_target = hat_big_tiles
 		_: _hat_target = hat_std_tiles
+	# 彭罗斯：迭代次数 × 裁剪半径（iterations 决定最小菱形边长，clip 决定圆窗大小 → 格数）
 	match size_id:
 		GameConfig.RANDOM:
 			# 随机档：先铺出一张足够大的密铺（迭代 5、不裁剪），
 			# 真正取哪一扇窗口由 _generate_penrose_random() 按目标格数现算（见 random_target_tiles）
 			iterations = 5
 			clip_radius = 1.05
+		GameConfig.SMALL:
+			iterations = 4
+			clip_radius = 0.66   # 80 落子格
 		GameConfig.ENHANCED:
 			iterations = 5
-			clip_radius = 0.88   # 约 360 落子格 / 401 顶点
+			clip_radius = 0.88   # 360 落子格 / 401 顶点
 		_:  # STANDARD or unknown
-			iterations = 4
-			clip_radius = 0.82   # 约 120 落子格 / 141 顶点
+			iterations = 5
+			clip_radius = 0.60   # 170 落子格
+	# ★★ 2026-11-06：棋盘「XX随机」的**目标格数**在这里落定（本函数是唯一知道档位枚举的地方）。
+	#   固定盘与旧 RANDOM 档都必须写 0 —— 写 0 的语义是"不覆盖"，让四个随机生成器回到
+	#   老口径 `random_target_tiles`（AI 仪器/旧棋谱靠它逐位复现）。
+	_rand_target_override = _size_nominal(size_id) if GameConfig.board_random_shape else 0
 	use_circle_clip = true
 	var head_txt := _board_size_name(size_id)
 	if GameConfig.board_type == GameConfig.BOARD_CUBE:
@@ -10816,14 +10910,19 @@ func _apply_board_size(size_id: int) -> void:
 			else "爱因斯坦·" + hk + " " + str(_hat_target) + " 格（" + _board_size_name(size_id) + "）")
 	print("棋盘：", head_txt, " | 迭代：", iterations, " | 裁剪半径：", clip_radius)
 
+## 尺寸档 → 显示名。★ 2026-11-06 起前两档叫「9×9 / 13×13 / 19×19」的对标值，
+##   名称里**不写精确格数**（五张盘各不相同，写进去就必然与实测不符）。
+##   `RANDOM` 只剩旧棋谱/命令行会带进来，名字沿用旧的「随机/迷你」（不参与任何新 UI）。
 func _board_size_name(size_id: int) -> String:
 	if size_id == GameConfig.RANDOM:
-		# 只剩筝形盘没有随机档：全局 RANDOM 槽位在它下面是「迷你」固定盘
+		# 只剩筝形盘没有随机档：RANDOM 槽位在它下面是「迷你」固定盘
 		#（雪花 2026-09-16、帽子 2026-09-19 起都有真随机档 → 不能再算进「迷你」）
 		return "迷你" if GameConfig.board_type == GameConfig.BOARD_KITE else "随机"
+	if size_id == GameConfig.SMALL:
+		return "9×9"
 	if size_id == GameConfig.ENHANCED:
-		return "加强"
-	return "标准"
+		return "19×19"
+	return "13×13"
 
 func _capture_and_quit() -> void:
 	await get_tree().create_timer(2.0).timeout
@@ -10879,14 +10978,18 @@ func _capture_and_quit() -> void:
 ##   不会出现"棋盘先按老几何缩一次、建完 UI 再跳一下"。
 ##
 ## ★ 三层闸门，各管一件事，**不许合并**：
-##   ① `_drawer_available()` —— 这一侧**有没有内容**（左抽屉只在联机态存在）；
+##   ① `_drawer_available()` —— 这一侧**有没有内容**（2026-11-02 起两侧恒有）；
 ##   ② `_drawer_cramped()`   —— 视口**够不够宽**（不够就退化成浮层，不挤棋盘）；
 ##   ③ `_drawer_wants_open()`—— **用户**点没点开。
 ##   面板"画不画"（`_drawer_shows()`）与"占多宽"（`_drawer_band()`）是**两个**函数。
 ##   ★ 2026-10-22 起 `_drawer_band()` **不读开合**（用户口令「棋盘固定在中心不要动」）：
 ##     它恒按"抽屉展开时该占多少"算，折叠只影响 `_drawer_shows()` 与面板贴哪条边。
 
-## 抽屉宽度（逻辑像素）。左右取同一个值：内容宽 172 = 3 个 52px 表情格 + 2 个 8px 间隙。
+## 抽屉宽度（逻辑像素）。左右取同一个值：内容宽 172 = 200 − 2 × `drawer_pad`(14)。
+## ⚰️ 曾经写的是"172 = 3 个 52px 表情格 + 2 个 8px 间隙" —— 表情 2026-11-02 整套删除后，
+##   这个推导的**每一项都已不存在**（52px 表情格 / 8px 间隙都是表情九宫格的几何）。
+##   172 这个数一个字节没变，但它现在的真源是 `drawer_pad`，不是表情格 ——
+##   照旧注释去调表情格尺寸的人会发现"改了没反应"（§33 死参数）。
 const DRAWER_W_LEFT: float = 200.0
 const DRAWER_W_RIGHT: float = 200.0
 ## 折叠状态只剩一条贴边的把手 —— 把手就是"抽屉缩回侧边"的那条边。
@@ -10897,7 +11000,15 @@ const DRAWER_HANDLE_H: float = 96.0
 ## ⚰️ 2026-10-22 墓碑：这个常量的取值理由原本是"面板底吃 `style_dialog_panel()` 那套，
 ##   描边内侧还有 ~18px 的 content margin"。抽屉底色改成同深浅的自拼 StyleBox 之后
 ##   content margin 已定为 0（见 `_drawer_stylebox()`）⇒ 那半句不再成立，取值本身不变。
-const DRAWER_PAD: float = 14.0
+# ★★ 2026-11-08：`const` → `@export var`（本轮唯一理由：`--portraittest` ⑤d 的阴性对照
+#   需要一根**推得动**的杠杆）。背景：面板改成贴屏幕侧边之后，HUD 盒离屏幕边的余量 =
+#   `DRAWER_HANDLE_W + 本值`，**不再随 `hud_landscape_margin` 变** ⇒ 旧杠杆（把那个边距
+#   归 0）已经推不动它，⑤d 当场报「判据恒真，等于没有判据」。
+#   ★ 默认值一字不变（14）⇒ 出货行为与改前逐像素相同；改变的是"谁能动它"。
+#   ★ 也顺带归队本项目「数值一律 @export 可调」那条约定。
+#   ⚠️ 谁临时改它谁必须还原（`--portraittest` ⑤d 用 `pad_bak` 还原）——
+#     它与 `DRAWER_W_LEFT` 一起决定内容宽 172，改了会把聊天行挤碎。
+@export var drawer_pad: float = 14.0
 ## 视口窄到"两侧都展开就挤不出这么宽的棋盘" ⇒ 退化成浮层（面板浮在盘上，不挤棋盘）。
 ## 取 380：标准盘在 1152 基准视口下本来就有 600+，380 已经小到落子点要挤在一起。
 const DRAWER_MIN_BOARD_W: float = 380.0
@@ -10908,12 +11019,17 @@ const DRAWER_MIN_BOARD_W: float = 380.0
 ##   朝反方向（提亮）会让浅底主题上的白字掉进 §130 那个明度死区。
 const DRAWER_SURFACE_MIX: float = 0.07
 
-## 这一侧**有没有内容**。左抽屉只有联机内容（双方头像 + 表情）⇒ 单机/人机档连把手都不出现
-## （否则玩家会去点一条点了没反应的边）。
+## 这一侧**有没有内容**。★ 2026-11-02 起**两侧、所有模式恒有内容**：
+##   · 左 = 双方身份槽 + 常用短语格 + 聊天区（原来是联机独占；用户口令「单人模式下也加上左抽屉，
+##     未来或许可以让 AI 对手也能像真人一样聊天」）；
+##   · 右 = 对局按键。
+##
+## ★★ 这条改动**不需要碰几何**，原因在 `_drawer_band()` 那段长注释里：从 2026-10-22「棋盘固定
+##   在中心不要动」起，两侧带宽就**恒等预留**了（代价正是"单机态左侧 250 是纯留白"）。
+##   ⇒ 左抽屉在单机里出现只是把**那块留白填上**，`board_area()` 一个像素都不变。
+## ★ 名字里的 side 仍然参与判断（写成 `side == 0 or side == 1`）：恒真的同时不留未用参数。
 func _drawer_available(side: int) -> bool:
-	if side == 0:
-		return game_mode == ONLINE
-	return true
+	return side == 0 or side == 1
 
 
 func _drawer_width(side: int) -> float:
@@ -10968,6 +11084,10 @@ func _drawer_shows(side: int) -> bool:
 ## 缩放重排一遍。用户看到的正是"点一下抽屉，整盘棋跳一下"。
 ## 现在的口径 = **棋盘尺寸恒为"全部抽屉都展开"时的尺寸**：
 ##   · 非 cramped：`边距 + 面板 + 把手` —— 够放两条 200 面板 + 把手，且与开合**无关**；
+##     ★ 2026-11-08 起抽屉真的占的是 `把手 + 面板`（面板贴边、把手在最外沿），比这个数
+##       少一个 `边距` ⇒ 这一项现在是"面板与棋盘之间的呼吸缝"，不是误差。
+##       **刻意不删**：删了棋盘会往两侧各长 12px，而 `--drawertest` ②③⑦ 与
+##       `--portraittest` ⑤d 全是按这个数写的口径。
 ##   · cramped（视口放不下 ⇒ 浮层）：只让出把手宽，面板浮在盘上方（那一档本来就承认重叠）。
 ## 两个分支都**不含**开合状态 ⇒ `board_area()` 在会话内只随视口尺寸变。
 ## 折叠 = "面板与内容不再画出来 + 左右多出空白"，棋盘纹丝不动。
@@ -10977,8 +11097,8 @@ func _drawer_shows(side: int) -> bool:
 ## `(0, 250)` ⇒ `board_area()` 的中心比窗口中心偏左 **125px**，盘整体左移。
 ## 现在两侧**恒等预留** ⇒ `board_area()` 恒以窗口中线对称 ⇒ **棋盘永远在正中间**，
 ## 与模式、与开合全都无关。
-## ★ 代价：单机态左侧那 250 是**纯留白**（那里没有抽屉内容）。这是"恒居中"的直接后果 ——
-##   想在左边放东西（例如单机也显示双方身份），是另一件事，不在几何里决定。
+## ★ 代价：左侧那 250 在**任何模式**下都被预留（2026-11-02 起左抽屉在单机模式也真的画在那里，
+##   所以这已不是留白而是"抽屉位"）。想拿回空间就得让棋盘动，两者互斥。
 ## ★ 代价（用户已知并选择）：折叠**拿不回**空间。想拿回就得让棋盘动，两者互斥。
 func _drawer_band(side: int) -> float:
 	# 浮层态：面板贴屏幕边浮在盘上，只有把手是需要让位的（它必须能点到，不许压在盘上）。
@@ -11002,65 +11122,177 @@ func board_area() -> Rect2:
 			maxf(vs.y - 2.0 * margin, 1.0))
 
 
-## 抽屉**面板**的屏幕矩形。整条通高（从 `hud_landscape_margin` 到同距离的底），
-## 所以它永远完整落在视口内，且高度不依赖内容（不读节点 ⇒ 仍是纯几何）。
+## 抽屉**面板**的屏幕矩形：**水平贴屏幕侧边**，垂直仍上下各留 `hud_landscape_margin`。
+## 外侧那条 `DRAWER_HANDLE_W` 恒留给「关闭抽屉」按钮。高度不依赖内容（不读节点 ⇒ 纯几何）。
+##
+## ★★ 2026-11-08 改（用户口令「改成抽屉与屏幕侧边相接，最侧边的一条就是关闭抽屉的
+##   按钮」）。上一版：面板还留 `hud_landscape_margin` 的外边距、上下也各扣一个边距
+##   ⇒ 看着是一张浮在页面上的卡片，不是从侧边抽出来的抽屉；而关闭把手贴在**面板内侧**
+##   （靠棋盘那一侧）的一颗小按键上，既不像抽屉的边、也不好按。现在：
+##     · 面板 x = `DRAWER_HANDLE_W`（左）/ `视口宽 − 把手 − 面板宽`（右）—— 紧贴按钮条；
+##     · 面板 y/h = `边距` / `视口高 − 2×边距` —— ★ **垂直方向刻意不动**（见下）；
+##     · 外侧两个角倒角归零（`_drawer_stylebox(side)`）—— 贴边还留圆角会露出页面底的缺口。
+##   ⚠️ 这里**不再读** `_drawer_expanded()`：展开态与浮层态的水平摆法完全一样，两者的差别
+##     只在"挤不挤棋盘"（那是 `_drawer_band()` 的事），不在面板贴哪条边。
+##   ★ 垂直方向**刻意不动**（仍是上下各留 `hud_landscape_margin`）：
+##     ① 抽屉内容区的高度、身份槽 / 聊天区的纵向分配全是按这个高度排过的 ——
+##        改成通高等于把那一整套重排一遍，收益只是多 64px，不值；
+##     ② 上下留白与棋盘自己的 `board_margin` 视觉同源（面板不会顶着屏幕上下沿）。
+##     ⚠️ 别把"垂直边距"当成 `--portraittest` ⑤c/⑤d 的杠杆：那根杠杆现在是
+##        `drawer_pad`（水平方向的抽屉内容内缩）。我把这句写下来，是因为上一版注释
+##        就在这里断言过"⑤d 靠 margin 驱动"—— 那是**错的**，实测两轮才查清。
 func _drawer_rect(side: int) -> Rect2:
 	var vs := get_viewport_rect().size
 	if not _drawer_available(side):
 		return Rect2(0.0, 0.0, 0.0, 0.0)
 	var w: float = _drawer_width(side)
 	var m: float = GameConfig.hud_landscape_margin
-	var x: float = m if side == 0 else vs.x - m - w
-	if not _drawer_expanded(side):
-		# 浮层态：贴屏幕边，不占版面（band 仍是把手宽 —— 它就盖在盘上，收起即消失）。
-		x = 0.0 if side == 0 else vs.x - w
+	var x: float = DRAWER_HANDLE_W if side == 0 else vs.x - DRAWER_HANDLE_W - w
 	return Rect2(x, m, w, maxf(vs.y - 2.0 * m, 0.0))
 
 
-## 抽屉内容区（面板底扣掉内边距）。`_hud_box` / 身份槽 / 表情格都往这里摆。
+## 抽屉内容区（面板底扣掉内边距）。`_hud_box` / 身份槽 / 短语格（`_phrase_flow`）都往这里摆。
 func drawer_content_rect(side: int) -> Rect2:
 	var r := _drawer_rect(side)
-	if r.size.x <= 2.0 * DRAWER_PAD or r.size.y <= 2.0 * DRAWER_PAD:
+	if r.size.x <= 2.0 * drawer_pad or r.size.y <= 2.0 * drawer_pad:
 		return r
-	return r.grow(-DRAWER_PAD)
+	return r.grow(-drawer_pad)
 
 
-## 把手的屏幕矩形。展开时贴在面板**内侧**（panel 与棋盘之间），
-## 折叠/浮层时贴屏幕边 —— 两种位置都在 `_drawer_band()` 让出来的范围里，不会压盘。
+## 「关闭抽屉」按钮的屏幕矩形：**屏幕最外侧**的一条窄键，垂直范围与面板**逐像素相同**
+## （两者拼成同一个"抽屉 + 它的边"，任何一头短一截都会露出来）。
+## ★★ 2026-11-08：从"面板内侧那颗居中把手"搬到屏幕最外沿 —— 用户口令「最侧边的一条就是
+##   关闭抽屉的按钮」。所以它的位置**与开合无关**（恒在 `0` 或 `视口宽 − 把手宽`），
+##   动画期间由 `_apply_drawer_slide()` 补同一段 dx 跟着滑进滑出。
+## ★ 收起态**不画**（抽出归侧边悬停）；几何真源照旧留在这里 —— `judge_drawer_layout()`
+##   量它守"不出视口 / 不压棋盘"，`--drawertest` ⑪ 量它守"在最外侧且不与面板重叠"。
 func _drawer_handle_rect(side: int) -> Rect2:
 	var vs := get_viewport_rect().size
 	if not _drawer_available(side):
 		return Rect2(0.0, 0.0, 0.0, 0.0)
-	var hh: float = minf(DRAWER_HANDLE_H, vs.y)
-	var y: float = (vs.y - hh) * 0.5
-	if not _drawer_expanded(side):
-		return Rect2(0.0 if side == 0 else vs.x - DRAWER_HANDLE_W, y,
-				DRAWER_HANDLE_W, hh)
-	var pr := _drawer_rect(side)
-	var hx: float = pr.end.x if side == 0 else pr.position.x - DRAWER_HANDLE_W
-	return Rect2(hx, y, DRAWER_HANDLE_W, hh)
+	var m: float = GameConfig.hud_landscape_margin
+	var x: float = 0.0 if side == 0 else vs.x - DRAWER_HANDLE_W
+	return Rect2(x, m, DRAWER_HANDLE_W, maxf(vs.y - 2.0 * m, 0.0))
 
 
-## 翻一侧的抽屉。★ 只改"用户意图"那一个布尔，摆位交给 `_refit_hud()` ——
-## 在这里顺手摆一次的话，窗口尺寸一变就有两处各摆一份（铁律 8）。
-## ★ 2026-10-22：棋盘**不再为开合重算**（`_drawer_band()` 已与开合脱钩）。
-##   `_refit_drawers()` 里那句 `_adapt_to_screen()` 保留 —— 它是自归一的，跑一遍结果不变，
-##   但少了它就漏掉了"`game_mode` 中途变联机"那条路径（见那里的注释）。
-func _toggle_drawer(side: int) -> void:
+## 写"用户意图"的**唯一入口**（2026-11-07）。★ 摆位/棋盘重算全交给 `_refit_hud()`。
+## ★ 所有调用方要的都是"设成某个值"（气泡点击 / 终局自动拉开 / 收起把手 / 侧边悬停抽出），
+##   所以这里只提供 `set`，**不再有 `_toggle_drawer()` 那种"翻一下"的入口**：
+##   两条路径同时翻同一个布尔，谁先谁后都会翻错，且没有任何判据看得见。
+func _set_drawer_open(side: int, open: bool) -> void:
 	if not _drawer_available(side):
 		return
 	if side == 0:
-		_drawer_left_open = not _drawer_left_open
+		if _drawer_left_open == open:
+			return
+		_drawer_left_open = open
 	else:
-		_drawer_right_open = not _drawer_right_open
-	# 只翻"用户意图"，摆位与棋盘重算全交给 `_refit_hud()`（→ `_refit_drawers()` → `_adapt_to_screen()`）。
-	# ★ 这里**不**再顺手调一次 `_adapt_to_screen()`：那会让"棋盘怎么缩"多出第二个写入口，
-	#   而窗口尺寸变化走的是另一条路（`size_changed` → `_refit_hud`）⇒ 迟早只改一处。
+		if _drawer_right_open == open:
+			return
+		_drawer_right_open = open
+	# 左抽屉一展开，还没到期的气泡就没意义了（消息已经在记录里）⇒ 立刻收掉。
+	if side == 0 and open:
+		_dismiss_chat_bubble()
 	_refit_hud()
 
 
+## 收起把手的回调（2026-11-07 二次返工）。
+## ★★ 只做「展开 → 收起」这一半：抽出由侧边悬停负责，把手在收起态**不画出来**
+##   （用户口令「抽出的按钮隐藏，改成鼠标移动到侧边自动抽出」）。
+## ★ 点完立刻上 latch：浮层态下把手就贴在屏幕边的悬停热区里，
+##   不上锁的话下一帧 hover 会把它原样弹回来。
 func _on_drawer_handle_pressed(side: int) -> void:
-	_toggle_drawer(side)
+	_set_drawer_open(side, false)
+	_drawer_reopen_latch[side] = true
+
+
+## 侧边悬停自动抽出（2026-11-07 用户口令）。
+##
+## ★★ 只做「收起 → 抽出」这一半：**鼠标离开不再自动收回**（用户「抽屉默认拉开，
+##   收回时再用鼠标触发」）。收回走**展开态那颗可见的收起把手**
+##   （`_on_drawer_handle_pressed()`）；对话框因此能稳定停着，玩家打字/看记录时不会被抽走。
+## ★ 展开态还要检查 latch：刚点过收起、鼠标还没离开热区时不许立刻弹回来。
+## ★ 自检/截图（`GameConfig.is_automated_run()`）一律不跑：headless 下鼠标恒在 (0,0)，
+##   会把左抽屉恒打开，把 `--drawertest` / `--shotend` 这些档的初始状态悄悄改掉。
+func _update_drawer_hover() -> void:
+	var vp := get_viewport()
+	if vp == null:
+		return
+	var mp: Vector2 = vp.get_mouse_position()
+	var vs: Vector2 = get_viewport_rect().size
+	if mp.x < 0.0 or mp.y < 0.0 or mp.x > vs.x or mp.y > vs.y:
+		return
+	var edge: float = maxf(DRAWER_HANDLE_W, drawer_hover_edge_w)
+	for side in [0, 1]:
+		var strip: Rect2 = Rect2(0.0, 0.0, edge, vs.y) if side == 0 \
+			else Rect2(vs.x - edge, 0.0, edge, vs.y)
+		var in_strip: bool = strip.has_point(mp)
+		# latch 只在"鼠标真的离开过热区"之后解除
+		if not in_strip:
+			_drawer_reopen_latch[side] = false
+		if _drawer_wants_open(side):
+			continue
+		if in_strip and not _drawer_reopen_latch[side]:
+			_set_drawer_open(side, true)
+
+
+## 抽屉动画的 easing：线性推进 t，视觉走 smoothstep（两端减速，不生硬）。
+func _drawer_slide_eased(side: int) -> float:
+	var t: float = clampf(_drawer_left_t if side == 0 else _drawer_right_t, 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)
+
+
+## 把某一侧的**当前动画位置**写进面板 / 内容节点 / 收起把手。
+## ★ 面板的**尺寸**仍由 `_refit_drawers()` 写；这里只碰 `position.x` 与 `visible`。
+## ★ 左内容是面板子节点 ⇒ 自动跟着走；右 `_hud_box` 是 `_hud_layer` 下的自由 VBox
+##   （历史结构，见 `_refit_drawers()` 的注）⇒ 必须自己补同一段位移，否则按钮留原地。
+## ★★ 收起把手的**可见性与横向位置也在这里唯一写入**（铁律 8）：与面板同一段 dx 位移，
+##   于是拉出动画里它跟着从屏外滑进来；展开态才画，收起态不画（抽出归侧边悬停）。
+func _apply_drawer_slide(side: int) -> void:
+	var r: Rect2 = _drawer_rect(side)
+	var e: float = _drawer_slide_eased(side)
+	var vs: Vector2 = get_viewport_rect().size
+	var closed_x: float = -r.size.x - 8.0 if side == 0 else vs.x + 8.0
+	var x: float = lerpf(closed_x, r.position.x, e)
+	var dx: float = x - r.position.x
+	var panel: Panel = _drawer_left_panel if side == 0 else _drawer_right_panel
+	if panel != null and is_instance_valid(panel):
+		panel.position = Vector2(x, r.position.y)
+		# ★ 用动画进度而不是 `_drawer_shows()`：折叠指令下来后，面板要**继续显示到滑完**
+		#   （否则直接消失，"推入动画"根本看不见）。
+		panel.visible = e > 0.002
+	if side == 1 and _hud_box != null and is_instance_valid(_hud_box):
+		_hud_box.visible = e > 0.002
+		_hud_box.position.x = drawer_content_rect(1).position.x + dx
+	var handle: Button = _drawer_left_handle if side == 0 else _drawer_right_handle
+	if handle != null and is_instance_valid(handle):
+		var hr: Rect2 = _drawer_handle_rect(side)
+		handle.visible = _drawer_wants_open(side) and e > 0.002
+		handle.position = Vector2(hr.position.x + dx, hr.position.y)
+
+
+## 逐帧：① 侧边悬停自动开合 ② 动画推进 ③ 写视觉。
+## ★★ 必须挂在 `_process()` 那句「没有落子/提子动画就 early return」**之前** ——
+##   静默对局里动画表恒空，放后面就是"抽屉永远不动"（同棋钟 / 聊天跟随那一族的老坑）。
+func _tick_drawers(delta: float) -> void:
+	var auto: bool = GameConfig.is_automated_run()
+	if drawer_hover_enabled and not auto and not _drawer_hover_lock:
+		_update_drawer_hover()
+	var tl: float = 1.0 if _drawer_left_open else 0.0
+	var tr: float = 1.0 if _drawer_right_open else 0.0
+	if auto:
+		# 自检/截图：直接落到终态，不许截到半途的抽屉，也不许 hover 改初始状态。
+		_drawer_left_t = tl
+		_drawer_right_t = tr
+	else:
+		var step: float = delta / maxf(drawer_slide_sec, 0.01)
+		_drawer_left_t = move_toward(_drawer_left_t, tl, step)
+		_drawer_right_t = move_toward(_drawer_right_t, tr, step)
+	if absf(_drawer_left_t - _drawer_slide_applied.x) > 0.0005 \
+			or absf(_drawer_right_t - _drawer_slide_applied.y) > 0.0005:
+		_apply_drawer_slide(0)
+		_apply_drawer_slide(1)
+		_drawer_slide_applied = Vector2(_drawer_left_t, _drawer_right_t)
 
 
 # ====== 自适应窗口 ======
@@ -11102,6 +11334,11 @@ func _adapt_to_screen():
 		vertices[i] = (vertices[i] - center) * scale_factor + target
 	_compute_tile_metrics()
 	_rebuild_edge_map()   # 几何定稿后重建共享边映射（所有生成/快照路径都经此处）
+	# ★ 盘的几何必须排在 `_rebuild_edge_map()` **之后**：爱因斯坦盘的贴合版盘边要读
+	#   `_edge_neighbor` 里的外边界边（见 `_board_boundary_ring()`）。原先这一步在
+	#   `_compute_tile_metrics()` 末尾 ⇒ 拿到的是上一张盘的边映射（首盘则全空）
+	#   ⇒ 盘边会退回凸包，而且**一声不响**（换盘后看起来"修了跟没修一样"）。
+	_rebuild_board_panel()
 	_fit_click_area()     # ★ 让「可点区域」跟着棋盘走（见下），否则窗口一变比例边缘格子就点不动
 
 ## 把 `click_area`（落子的物理拾取区）摆到**棋盘包围盒**上，四边各留 `pad` 余量。
@@ -11161,8 +11398,10 @@ func _compute_tile_metrics() -> void:
 		tile_r[i] = r
 		if r < _min_tile_r:
 			_min_tile_r = r
-	# 盘的多边形与 tile_centers **同生命周期**（都由顶点像素坐标派生）⇒ 在这里一次算好
-	_rebuild_board_panel()
+	# 盘的多边形与 tile_centers **同生命周期**（都由顶点像素坐标派生）——
+	# ★ 但**不在这里**算：爱因斯坦盘的盘边要读 `_edge_neighbor`，而它在 `_adapt_to_screen()`
+	#   里排在本函数**之后**。调用方 `_adapt_to_screen()` 会在 `_rebuild_edge_map()` 之后
+	#   显式调 `_rebuild_board_panel()`（见那里的注释）。
 
 ## 共享边 → 邻接瓷砖 映射（纯几何，与坐标无关）。盘面生成 / 联机快照后在
 ## _adapt_to_screen() 里重建一次；_draw 每帧查表即可判断「相邻两块瓷砖是否同色棋子」。
@@ -11232,13 +11471,40 @@ func generate_board() -> void:
 		_:
 			generate_penrose()
 
-## 是否走「随机」档：每局现场生成一张盘，格数≈random_target_tiles。
-## 彭罗斯 / 立方体 / 雪花 / 帽子 有随机档（雪花自 2026-09-16、帽子自 2026-09-19 起）；
-## 只剩筝形没有（RANDOM 槽位下是「迷你」固定盘）
-## —— 这一处排除，让抽种子/启动横幅/重开重生成/调参滑条对它们全部自动走固定档逻辑。
+## 是否走「随机形状」：每局现场生成一张形状不同的盘。
+## ★★ 2026-11-06 两根轴并存（**别把任何一个当成另一个的替代品**）：
+##   ① `board_size == RANDOM` —— **旧**自由随机档：格数 ≈`random_target_tiles`（约 200），不看档位表。
+##      只有旧棋谱 / 命令行 / AI 仪器会产出它。
+##   ② `board_random_shape` —— **新**（菜单「XX随机」）：格数仍由小/中/大三档决定，
+##      随机只换形状。目标格数经 `_rand_target_override` 传下去。
+##   两者都让本函数为真（下游"要不要现场生成/要不要抽种子"的逻辑对两种情形完全一致）。
+## 筝形两者都排除：它的生成器按正六边形环数取样，没有随机形状实现
+## （菜单里也就没有「筝形随机」这一项 —— 见 `MenuModel.BOARD_KINDS` 那段）。
+## ★ 这一处排除让抽种子/启动横幅/重开重生成/调参滑条对其它四张盘全部自动走同一套逻辑。
 func _is_random_board() -> bool:
-	return GameConfig.board_size == GameConfig.RANDOM \
-		and GameConfig.board_type != GameConfig.BOARD_KITE
+	if GameConfig.board_type == GameConfig.BOARD_KITE:
+		return false
+	if GameConfig.board_random_shape:
+		return true
+	return GameConfig.board_size == GameConfig.RANDOM
+
+## 尺寸档 → **对标格数**（9×9/13×13/19×19 = 81/169/361）。`RANDOM`/未知 → 0（= 不覆盖）。
+## ★ 这是"随机形状在固定格数下生成"的目标来源：噪声由生成器自己的 jitter 加，见 `_random_shape_target()`。
+func _size_nominal(size_id: int) -> int:
+	match size_id:
+		GameConfig.SMALL: return 81
+		GameConfig.STANDARD: return 169
+		GameConfig.ENHANCED: return 361
+	return 0
+
+## 四个随机生成器**共用**的目标格数。
+## · `_rand_target_override > 0`（菜单「XX随机」）⇒ 按档位的对标格数 + `random_tile_jitter`
+##   （抖动幅度沿用老旋钮：81±12 / 169±12 / 361±12 全落在各档的格数带内，见 `SIZE_TIERS`）
+## · 否则 = 旧口径 `random_target_tiles ± jitter`，**逐位不变**（AI 仪器与旧棋谱靠这条复现）
+## ⚠️ 必须四个生成器都调它：漏一个就是"那张盘的随机档格数不跟档位走"，而其它四张跟 —— 静默不一致。
+func _random_shape_target(rng: RandomNumberGenerator) -> int:
+	var base: int = _rand_target_override if _rand_target_override > 0 else random_target_tiles
+	return maxi(20, base + rng.randi_range(-random_tile_jitter, random_tile_jitter))
 
 ## 抽一颗新的随机种子（非 0；0 留给「未指定 / 由对端下发」的语义）
 func _fresh_seed() -> int:
@@ -11337,7 +11603,7 @@ func _generate_penrose_random() -> void:
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _rand_seed
-	var target: int = maxi(20, random_target_tiles + rng.randi_range(-random_tile_jitter, random_tile_jitter))
+	var target: int = _random_shape_target(rng)
 	_rand_target = target
 
 	# 5 个随机相位 = 一张全新密铺；同一 _rand_seed 必复现同一张盘
@@ -11718,7 +11984,7 @@ func _generate_cube_random() -> void:
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _rand_seed
-	var target: int = maxi(20, random_target_tiles + rng.randi_range(-random_tile_jitter, random_tile_jitter))
+	var target: int = _random_shape_target(rng)
 	_rand_target = target
 	var want_hex: int = maxi(3, int(round(float(target) / 3.0)))
 
@@ -12651,7 +12917,7 @@ func _snow_build(gammas: Array, wc: Vector2, radius: float, rot: float = 0.0) ->
 func _generate_snowflake_random() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _rand_seed
-	var target: int = maxi(20, random_target_tiles + rng.randi_range(-random_tile_jitter, random_tile_jitter))
+	var target: int = _random_shape_target(rng)
 	_rand_target = target
 	var gammas: Array = _random_octagrid_gammas(rng)
 	var rot: float = rng.randf() * (TAU / 8.0)      # 密铺 8 重对称 → 转 45° 即覆盖全部不同朝向
@@ -12898,12 +13164,15 @@ func _snow_self_test() -> void:
 		n_star8, origin_val, bad_share,
 		"✓" if n_star8 >= 1 and bad_share == 0 and origin_val == 8 else "✗"])
 
-	# ⑤ 三固定档循环（迷你 3 / 标准 5 / 加强 6）—— 层数直接钉 _snow_r_actual
-	#（RANDOM 槽位现在是随机档，不能再拿它当「迷你」用）
+	# ⑤ 层数阶梯（3 / 5 / 6 层 → 72 / 200 / 296 格）—— 层数直接钉 `_snow_r_actual`
+	# ★★ 2026-11-06 改名（原为「迷你 / 标准 / 加强」）：三档现在对标 9×9/13×13/19×19，
+	#   雪花取的是 **3 / 4 / 7 层**（见 `_apply_board_size()`），所以 5 层的盘**不再等于**
+	#   "标准档"—— 继续叫它"标准"就是名字与行为不符（§113）。本条量的是
+	#   「层数 → 格数」这张阶梯本身，与档位无关，所以按层数命名。
 	var ladder := [
-		{"size": GameConfig.STANDARD, "name": "迷你", "n": 3, "tiles": 72},
-		{"size": GameConfig.STANDARD, "name": "标准", "n": 5, "tiles": 200},
-		{"size": GameConfig.ENHANCED, "name": "加强", "n": 6, "tiles": 296},
+		{"size": GameConfig.STANDARD, "name": "3层", "n": 3, "tiles": 72},
+		{"size": GameConfig.STANDARD, "name": "5层", "n": 5, "tiles": 200},
+		{"size": GameConfig.ENHANCED, "name": "6层", "n": 6, "tiles": 296},
 	]
 	for ld in ladder:
 		GameConfig.board_size = ld["size"]
@@ -13427,6 +13696,105 @@ func _hat_adj_dedup(adj: Array) -> Array:
 	return out
 
 
+## 选区圆底（**几何版**，2026-11-08 修「爱因斯坦盘的裁切不规整」）：
+## 按「瓦片形心到种子形心的距离」取最近 `n_target` 片 —— 这就是**离散圆盘**，
+## 各方向的边界半径一致 ⇒ 顶点凸包自然接近正圆，盘边不会再读成「歪多边形」。
+##
+## ★ 为什么不用 BFS 步数当圆底（原做法）：非周期密铺里**图距离 ≠ 几何距离**。
+##   帽子的池是 H8 树展平出来的、带细长触手与走廊 —— 顺着走廊走一步的几何长度可能是
+##   别处的两倍，于是「离种子 k 步」的等距线是个**歪掉的闭合圈**：走廊方向鼓出去、
+##   垂直方向缩进来。这正是用户看到的那块「不规整的裁切」（凹口 + 鼓包交替）。
+## ★ 距离一律用**帽子档参考形心**（`_hat_ref_centers()`）：与当前种类无关 ⇒ ⑥ 三档同构不破。
+## ★ 连通性：形心最近的 N 片在实操里几乎恒连通，但不做保证 —— 拿完立刻验一次
+##   「含种子的连通块是否 = N」，不足就从**贴着选区的前沿**按距离补（补出的仍是最近的那批）。
+func _hat_radial_pick(adj: Array, cents: Array, seed: int, n_target: int) -> Array:
+	var n: int = adj.size()
+	if n <= 0 or cents.size() != n or seed < 0 or seed >= n:
+		return []
+	var want: int = mini(n_target, n)
+	var c0: Vector2 = cents[seed]
+	# 按距离升序（并列用池索引 ⇒ 同种子逐位复现）
+	var order: Array[int] = []
+	order.resize(n)
+	for i in n:
+		order[i] = i
+	var dist2: Array[float] = []
+	dist2.resize(n)
+	for i in n:
+		dist2[i] = (cents[i] as Vector2).distance_squared_to(c0)
+	order.sort_custom(func(a: int, b: int) -> bool:
+		if not is_equal_approx(dist2[a], dist2[b]):
+			return dist2[a] < dist2[b]
+		return a < b)
+	var picked: PackedByteArray = PackedByteArray()
+	picked.resize(n)
+	picked.fill(0)
+	var out: Array = []
+	for k in want:
+		var v: int = order[k]
+		picked[v] = 1
+		out.append(v)
+	# 连通修补：只留含种子的块，然后从「贴着选区的未选片」里按距离补回同样多的片。
+	if _connected_block(adj, picked, seed) != want:
+		var reach: PackedByteArray = _reach_mask(adj, picked, seed)
+		out.clear()
+		for v in n:
+			if reach[v] == 1:
+				out.append(v)
+		picked.fill(0)
+		for v in out:
+			picked[int(v)] = 1
+		var head := 0
+		while out.size() < want:
+			var u: int = order[head]
+			head += 1
+			if head >= n:
+				break
+			if picked[u] == 1:
+				continue
+			var touch := false
+			for nb in adj[u]:
+				if picked[int(nb)] == 1:
+					touch = true
+					break
+			if not touch:
+				continue
+			picked[u] = 1
+			out.append(u)
+	return out
+
+
+## `picked` 里含 `seed` 的连通块大小（种子本身不在 `picked` 里时返回 0）。
+func _connected_block(adj: Array, picked: PackedByteArray, seed: int) -> int:
+	var seen: PackedByteArray = _reach_mask(adj, picked, seed)
+	var c := 0
+	for v in seen.size():
+		if seen[v] == 1:
+			c += 1
+	return c
+
+
+## `picked` 里从 `seed` 出发可达的掩码（BFS，只走 `picked == 1` 的片）。
+func _reach_mask(adj: Array, picked: PackedByteArray, seed: int) -> PackedByteArray:
+	var seen: PackedByteArray = PackedByteArray()
+	seen.resize(picked.size())
+	seen.fill(0)
+	if seed < 0 or seed >= picked.size() or picked[seed] == 0:
+		return seen
+	seen[seed] = 1
+	var q: Array[int] = [seed]
+	var head := 0
+	while head < q.size():
+		var cur: int = q[head]
+		head += 1
+		for nb in adj[cur]:
+			var u: int = int(nb)
+			if picked[u] == 1 and seen[u] == 0:
+				seen[u] = 1
+				q.append(u)
+	return seen
+
+
 ## 池内「离 seed 几步」的距离场。随机档按**图的步数**限幅要用它 ——
 ## 不能按坐标比例限：池形状不规则，坐标上的「半径内」可能已经在池外了。
 func _hat_dist_field(adj: Array, seed: int) -> Array[int]:
@@ -13558,9 +13926,14 @@ func _hat_refill(adj: Array, sel: Array, n_target: int, dist: Array[int], banned
 ##   否则三种类会因几何不同而挑出不同的种子片/选区，自检 ⑥「同种子三档同构」就站不住。
 ## 若某轮补不回 n_target（banned 把池切小了），**撤回该轮**并收工 —— 宁可留一片叶片，
 ## 也不让盘面凭空缺一块（缺块会让格数断言与形状体检双双失真）。
-func _hat_grow_pick(adj: Array, seed: int, n_target: int, dist: Array[int]) -> Array:
+func _hat_grow_pick(adj: Array, seed: int, n_target: int, dist: Array[int], cents: Array = []) -> Array:
 	var banned: Dictionary = {}
-	var sel: Array = _hat_bfs_pick(adj, seed, n_target)
+	# 圆底走**几何圆盘**（`_hat_radial_pick()`）；拿不到参考形心或自检要求 BFS 档时退回 BFS 球。
+	var sel: Array = _hat_bfs_pick(adj, seed, n_target) \
+		if (cents.size() != adj.size() or _hat_radial_mode == 1) \
+		else _hat_radial_pick(adj, cents, seed, n_target)
+	if sel.size() < n_target:
+		sel = _hat_bfs_pick(adj, seed, n_target)
 	for _pass in 8:
 		var in_sel: PackedByteArray = PackedByteArray()
 		in_sel.resize(adj.size())
@@ -13604,12 +13977,20 @@ func _hat_grow_pick(adj: Array, seed: int, n_target: int, dist: Array[int]) -> A
 	return sel
 
 
-## 选区平滑（2026-09-20 用户报「随机盘不圆、有的缺个口子」）：
-## **等量换片**的局部搜索 —— 每轮全池找一对「换入 u / 换出 b」：
-##   u = 空点、在选区内邻居最多（贴在凹口里）；b = 选区片、在选区内邻居最少（凸出的角）。
-## 换完「选区内边数」严格增加（增量 = deg_in(u) − deg_in(b) ≥ 1）⇒ 周长单调下降：
-## 凹口被逐层填平、凸角被削圆，**格数始终不变**，且不求助于任何坐标量。
-## 剔叶已保证 deg_in(b) ≥ 2，配对真赚不亏；并列取池索引最小（确定性）。
+## 等量换片**最小化周长**的局部搜索 —— 每轮全池找一对「换入 u / 换出 b」，
+## 要求「换完之后选区的边界边数（= 周长）**严格减少**」：凹口被逐层填平、凸角被削圆，
+## **格数始终不变**，且不求助于任何坐标量。
+##
+## ★★ 判据必须带**总度数**（2026-11-08 修「爱因斯坦盘偶发被咬掉一口」）：
+##   设选区 S 的周长（边界边数）B，则 ∑_{v∈S} deg(v) = 2·E_in + B。换出 b 换入 u 后
+##      ΔB = (deg(u) − deg(b)) − 2·(deg_in(u) − deg_in(b))
+##   旧判据只看后一项（deg_in 差 ≥ 1）⇒ 把一个 **6 气的外圈空点**换进来、把一个
+##   **2 气的边界片**换出去时，ΔB = (6−2) − 2·(3−2) = **+2**：判据说"赚了"，周长反而涨了。
+##   于是循环永远"有净赚"、一路换到 guard 耗尽（实测中等档 8×169 = 1352 次全用光，
+##   而大档只换 8 次就收敛）—— 停下来的形状是这堆无意义换片的随机中间态：
+##   盘面边缘被啃掉一块、整体明显不均匀。这正是那个"偶发"症状。
+##   现在用 score(v) = 2·deg_in(v) − deg_tot(v)，ΔB = −(score(u) − score(b))，
+##   要求 score(u) > score(b) ⇒ 周长**单调**下降 ⇒ 必然收敛到局部最优。
 ## ★ 连通性保护：换出前 BFS 验证「选区 − {b} + {u}」仍连通，不行就把 b 拉进保护名单重找。
 ## ★ 三档同构：只用去重邻接表 / 邻居计数 / 池索引 —— 池拓扑与种类无关，
 ##   同种子三档换出的片逐位相同（--hattest ⑥ 不受影响）。
@@ -13639,23 +14020,30 @@ func _hat_round_sel(adj: Array, sel: Array, banned: Dictionary) -> Array:
 				d += 1
 		deg_in[v] = d
 	var protect: Dictionary = {}
+	# deg_tot[v] = v 的总度数（= 池内邻居数，恒定）—— 判据必须带上它，见下面那段长注释。
+	var deg_tot: PackedInt32Array = PackedInt32Array()
+	deg_tot.resize(n)
+	for v in n:
+		deg_tot[v] = (adj[v] as Array).size()
 	var guard := 8 * out.size()
 	while guard > 0:
 		guard -= 1
 		var bu := -1
-		var bd_u := 0
+		var su := -2147483648
 		var bb := -1
-		var bd_b := 9999
+		var sb := 2147483647
 		for v in n:
-			var dv := deg_in[v]
+			# 周长变化 ΔB = 【(deg(u) − deg(b)) − 2·(deg_in(u) − deg_in(b))】=−(score(u) − score(b))，
+			# 其中 score(v) = 2·deg_in(v) − deg_tot(v)。要周长**严格下降**（ΔB ≤ −1）⇔ score(u) > score(b)。
+			var s: int = 2 * deg_in[v] - deg_tot[v]
 			if picked[v] == 1:
-				if dv < bd_b and not protect.has(v):
-					bd_b = dv
+				if s < sb and not protect.has(v):
+					sb = s
 					bb = v
-			elif not banned.has(v) and dv > bd_u:
-				bd_u = dv
+			elif not banned.has(v) and s > su:
+				su = s
 				bu = v
-		if bu < 0 or bb < 0 or bd_u - bd_b < 1:
+		if bu < 0 or bb < 0 or su - sb < 1:
 			break                      # 没有净赚的配对 → 已到局部最优（紧致形）
 		# 试换：先验连通（b 是割点的话这颗 b 不能换出）
 		picked[bb] = 0
@@ -13693,10 +14081,290 @@ func _hat_round_sel(adj: Array, sel: Array, banned: Dictionary) -> Array:
 
 
 ## 选区总入口：正常走「BFS 圆底 + 剔叶片」；`_hat_pick_mode == 1` 时走**裸 BFS**（只给自检做阴性对照）。
-func _hat_pick(adj: Array, seed: int, n_target: int, dist: Array[int]) -> Array:
+func _hat_pick(adj: Array, seed: int, n_target: int, dist: Array[int], cents: Array = []) -> Array:
 	if _hat_pick_mode == 1:
 		return _hat_bfs_pick(adj, seed, n_target)
-	return _hat_grow_pick(adj, seed, n_target, dist)
+	return _hat_grow_pick(adj, seed, n_target, dist, cents)
+
+
+## `in_sel` 标记的池子集有几个连通块（削峰的连通闸用；只数被标记的那些片）。
+func _hat_sel_components(adj: Array, in_sel: PackedByteArray) -> int:
+	var seen: PackedByteArray = PackedByteArray()
+	seen.resize(in_sel.size())
+	seen.fill(0)
+	var comps: int = 0
+	var stack: Array[int] = []
+	for v in in_sel.size():
+		if in_sel[v] == 0 or seen[v] == 1:
+			continue
+		comps += 1
+		seen[v] = 1
+		stack.append(v)
+		while stack.size() > 0:
+			var x: int = stack.pop_back()
+			for nb in adj[x]:
+				var u: int = int(nb)
+				if in_sel[u] == 1 and seen[u] == 0:
+					seen[u] = 1
+					stack.append(u)
+	return comps
+
+
+## 削峰：抠掉「气数最多、且抠完不会让**任何**邻居跌破 `floor_deg`」的落子点。
+##
+## 输入输出都是**池索引数组**，`adj` 必须是去重版池邻接（`_hat_adj_dedup()`）。
+## 只用组合量（度数 / 池索引 / 图 BFS）⇒ 三档抠出的洞**逐位相同**（与 ②⑥ 同一条纪律）。
+##
+## 为什么这样抠（实测见 `hat_peak_trim` 那组 @export 注释 + 工作区脚本 `_trim_tradeoff.py`）：
+##   · 贪心「先抠当前度数最大的」⇒ 抠掉的全是 6 气点（盘里占 42%，就是四方盘的「十字路口」）；
+##   · 每抠一个，它的邻居各 -1 气 ⇒ 后抠的会自然散开，不会形成连片禁区（实测最近的两个洞相距 2 步）；
+##   · 一旦某个 6 气点周围贴着 4 气点，抠它就把邻居压成 3 气 ⇒ 被 `floor_deg` 挡掉。
+##     这正是「6 气点清不干净」的原因：85 个里只有 33 个静态可抠，最终抠掉约 15 个（剩 10%）。
+## ★ 末尾自带连通闸：抠完若裂成多块就**整体回退** —— 宁可这盘没削峰，也不给一盘碎棋
+##   （实测 5 颗种子 18/18 次抠点后连通块恒 1、且原盘本来没有割点，闸几乎不会响）。
+func _hat_peak_trim(adj: Array, sel: Array, floor_deg: int, min_deg: int, max_frac: float) -> Array:
+	var n_in: int = sel.size()
+	if n_in <= 8 or max_frac <= 0.0:
+		return sel
+	var in_sel: PackedByteArray = PackedByteArray()
+	in_sel.resize(adj.size())
+	in_sel.fill(0)
+	for v in sel:
+		in_sel[int(v)] = 1
+	var deg: PackedInt32Array = PackedInt32Array()
+	deg.resize(adj.size())
+	deg.fill(0)
+	for v in sel:
+		var iv: int = int(v)
+		var d := 0
+		for nb in adj[iv]:
+			if in_sel[int(nb)] == 1:
+				d += 1
+		deg[iv] = d
+	var cap: int = int(floor(float(n_in) * max_frac))
+	var removed: int = 0
+	while removed < cap:
+		var best: int = -1
+		var best_d: int = -1
+		for k in sel.size():
+			var v: int = int(sel[k])
+			if in_sel[v] == 0:
+				continue
+			var dv: int = deg[v]
+			if dv < min_deg:
+				continue
+			var safe: bool = true
+			for nb in adj[v]:
+				var u: int = int(nb)
+				if in_sel[u] == 1 and deg[u] - 1 < floor_deg:
+					safe = false
+					break
+			if not safe:
+				continue
+			if dv > best_d:          # 并列取先到的（sel 顺序确定 ⇒ 同种子逐位可复现）
+				best_d = dv
+				best = v
+		if best < 0:
+			break                    # 没有安全候选 → 削到顶了
+		in_sel[best] = 0
+		removed += 1
+		for nb in adj[best]:
+			var u: int = int(nb)
+			if in_sel[u] == 1:
+				deg[u] -= 1
+	if removed <= 0:
+		return sel
+	if _hat_sel_components(adj, in_sel) != 1:
+		return sel                   # 裂了 → 整体回退
+	var out: Array = []
+	for v in sel:
+		if in_sel[int(v)] == 1:
+			out.append(int(v))
+	return out
+
+
+# ---------------- 削峰洞「均分给相邻格」（Voronoi 切分 + 布尔并集）----------------
+##
+## 为什么要有这一步（2026-11-05 用户「洞都不算好看」）：只要洞还在，它就一定难看 ——
+## 洞的形状就是帽子瓦片本身（不规则、尖角多、细腰），平涂 / 淡色 / 镂空 / 分层渐隐只是
+## 换成另一种难看（五版目检记录见 `hat_peak_hole_style` 的注释）。
+## 用户提的办法（均分给邻居）在几何上完全成立，已用独立原型验证（工作区
+## `爱因斯坦瓦片参考/_均分原型.py`、`_均分预览2.py`）：
+##   ① 帽子瓦片对**顶点平均形心是星形** ⇒ 扇形/中垂线切分都不会伸到瓦片外；
+##   ② 切出来的块与邻居做并集后**全部是简单多边形**（无自交）；
+##   ③ 面积守恒：块面积合计 == 洞面积（实测 26 个 5/6 度洞，逐位相等）。
+## 结果：盘面上**没有洞**，原地只留下像细胞边界的接缝（两侧同色棋子时接缝自动不画）。
+## 代价：被并的邻居格子面积 +8%~26%（一块瓦片的面积被 5~6 个邻居按中垂线分掉）。
+##
+## 切法选 Voronoi（离哪个邻居格心最近归谁）而不是「扇形汇聚到洞心」：扇形会让 5~6 条线
+## 交于一点，目检是个明显的「星芒」焦点；Voronoi 的边界是邻居格心连线的中垂线，不汇聚，像细胞。
+
+func _poly_abs_area(poly: PackedVector2Array) -> float:
+	var s := 0.0
+	var n: int = poly.size()
+	for i in n:
+		s += poly[i].cross(poly[(i + 1) % n])
+	return absf(s) * 0.5
+
+
+## 当前盘面所有格子的面积之和（原始坐标，含均分后的膨胀）。
+func _hat_area_sum() -> float:
+	var acc := 0.0
+	for i in tiles.size():
+		var poly := PackedVector2Array()
+		for vi in tiles[i]:
+			poly.push_back(vertices[int(vi)])
+		acc += _poly_abs_area(poly)
+	return acc
+
+
+## 顶点索引 upsert（容差判据，照 `_hat_vertex_ids()` 的做法：量化桶 + 3×3 邻域距离）。
+## ★ 为什么必须去重：`_rebuild_edge_map()` 靠「两端顶点索引对」认共享边 ——
+##   同一个几何点若在两个多边形里拿到两个不同索引，那条边就配不上 ⇒
+##   「同色相邻棋子不画共享边」静默失效，`_adj_edge_consistency()` 也会红。
+func _peak_vertex_id(p: Vector2, buckets: Dictionary, inv: float, tol2: float) -> int:
+	var bx: int = int(floor(p.x * inv))
+	var by: int = int(floor(p.y * inv))
+	for dx in [-1, 0, 1]:
+		for dy in [-1, 0, 1]:
+			for rid in buckets.get(str(bx + dx) + "," + str(by + dy), []):
+				if (vertices[int(rid)] as Vector2).distance_squared_to(p) <= tol2:
+					return int(rid)
+	var nid: int = vertices.size()
+	vertices.append(p)
+	var bk: String = str(bx) + "," + str(by)
+	if not buckets.has(bk):
+		buckets[bk] = []
+	(buckets[bk] as Array).append(nid)
+	return nid
+
+
+## 在格 `g` 的顶点环里找到**连续出现的一段** `chain`，把整段替换成单个顶点 `mid_id`。成功返回 true。
+##
+## ★ 为什么不是「在一对边上插一个点」：一个邻居可能与洞共享**连续多条**边（洞有 14 个顶点、
+##   只有 5~6 个邻居），对它来说是一整段链。只插一个点会把中间那些顶点夹在两个 c 之间
+##   形成折返尖刺（面积还对、但那里多走了一遍反向边 ⇒ 自交、`_rebuild_edge_map` 认错）。
+## ★ 找不到就返回 false 并记一次 miss —— 宁可留一道极细缝，也不要把顶点插错位置。
+func _replace_chain(g: int, chain: Array, mid_id: int) -> bool:
+	var tv: Array = tiles[g]
+	var m: int = tv.size()
+	var L: int = chain.size()
+	if L <= 0 or L > m:
+		return false
+	for start in m:
+		var ok := true
+		for k in L:
+			if int(tv[(start + k) % m]) != int(chain[k]):
+				ok = false
+				break
+		if ok:
+			# ★ 后半段是 range(start + L, m) —— 不是 range(start + L, start + m)：
+			#   后者会多走 start 个点（配 %m 还会绕回开头再走一遍），把整个环复制一段出来，
+			#   面积凭空翻倍（2026-11-05 踩过：18 点环 = 14 点 + 4 次插入，却出现整段重复）。
+			var res: Array[int] = []
+			for q in start:
+				res.append(int(tv[q]))
+			res.append(mid_id)
+			for q in range(start + L, m):
+				res.append(int(tv[q]))
+			tiles[g] = res
+			return true
+	return false
+
+
+## 把每个洞切成扇形，并进各自的邻居 —— **直接在顶点环里替换**，不经过任何布尔运算。
+##
+## 做法（一步到位，且顶点索引天然一致）：
+##   1. 先把洞的顶点索引做成集合 `hset`；
+##   2. 对每个邻居格，把它自己环上的顶点按「是否落在洞边界上」标记（就是 `hset.has(索引)`）；
+##   3. 环上连续的一段 true = 它与洞共享的那条边界；把**段内部**的顶点整段换成洞的形心 c，
+##      两端保留（保留端点才面积守恒：p→a→c→b→q 比 p→a→…→b→q 多出来的正是扇形 (a,c,b)）；
+##   4. 段长 1 就不用动（那个点只是与洞相切，没有面积可分）。
+##
+## 结果：盘面上**没有洞**，原地只留下从洞的形心放射出去的几条分割线
+## （相邻两格同色棋子时那条线不画 —— 由 `_drawn_edge_segments()` 的同色规则自动处理）。
+##
+## ★ 为什么不用 Clipper 布尔并集（那版面积 0.000% 守恒、但索引对不上）：`Geometry2D.merge_polygons()`
+##   会把**共线点精简掉**，于是并过的那几格变成 12 点、邻居仍是 14 点 ⇒ 共享边的端点索引对不上 ⇒
+##   `_edge_shared_between()` 报「邻接却不共边」（实测 7 对；整盘统一去共线反而变 37 对，
+##   因为「某个点算不算共线」本身就是局部判据，两侧看法不同）。
+##   手工替换只用**已有索引**、不产生新坐标，两侧必然一致。
+## ★ 也不用 Voronoi 切分：它不保证每块贴住自己那条边（边的一端可能更靠近别的邻居格心）。
+func _hat_fill_holes(padj_u: Array, sel: Array, holes: Array) -> int:
+	if holes.is_empty() or holes.size() != _hat_peak_holes.size():
+		return 0
+	var gidx: Dictionary = {}
+	for k in sel.size():
+		gidx[int(sel[k])] = k
+	var inv: float = 1.0 / _HAT_MERGE_TOL
+	var tol2: float = _HAT_MERGE_TOL * _HAT_MERGE_TOL
+	var buckets: Dictionary = {}
+	for i in vertices.size():
+		var p: Vector2 = vertices[i]
+		var bk: String = str(int(floor(p.x * inv))) + "," + str(int(floor(p.y * inv)))
+		if not buckets.has(bk):
+			buckets[bk] = []
+		(buckets[bk] as Array).append(i)
+	var filled: int = 0
+	for hi in holes.size():
+		var ih: int = int(holes[hi])
+		var hids: Array = _hat_peak_holes[hi]
+		var n: int = hids.size()
+		if n < 3:
+			continue
+		var hc := Vector2.ZERO
+		var hset: Dictionary = {}
+		for vi in hids:
+			hset[int(vi)] = true
+			hc += vertices[int(vi)]
+		hc /= float(n)
+		var c_id: int = _peak_vertex_id(hc, buckets, inv, tol2)
+		for nb in padj_u[ih]:
+			if not gidx.has(int(nb)):
+				continue
+			var g: int = int(gidx[int(nb)])
+			var tv: Array = tiles[g]
+			var m: int = tv.size()
+			var onb: Array = []
+			var any_on := false
+			for k in m:
+				var is_on: bool = hset.has(int(tv[k]))
+				onb.append(is_on)
+				any_on = any_on or is_on
+			if not any_on:
+				continue
+			# 找一个不在洞边界上的起点，好把环"拉直"处理（段就不会跨环首尾）
+			var start0 := -1
+			for k in m:
+				if not bool(onb[k]):
+					start0 = k
+					break
+			if start0 < 0:
+				_hat_peak_merge_bad += 1     # 整个环都贴在洞上（退化）
+				continue
+			var res: Array[int] = []
+			var q: int = 0
+			while q < m:
+				var idx: int = posmod(start0 + q, m)
+				if not bool(onb[idx]):
+					res.append(int(tv[idx]))
+					q += 1
+					continue
+				var s2: int = q
+				while q < m and bool(onb[posmod(start0 + q, m)]):
+					q += 1
+				if q - s2 >= 2:
+					# 段内部换成形心，两端保留
+					res.append(int(tv[posmod(start0 + s2, m)]))
+					res.append(c_id)
+					res.append(int(tv[posmod(start0 + q - 1, m)]))
+					filled += 1
+				else:
+					res.append(int(tv[posmod(start0 + s2, m)]))
+					_hat_peak_merge_bad += 1  # 只与洞相切（段长 1），没有面积可分
+			if res.size() >= 3:
+				tiles[g] = res
+	return filled
 
 
 ## 清空 + 置「当前是帽子盘」标志（固定档与随机档共用，保证两条路径状态完全一致）
@@ -13706,6 +14374,7 @@ func _hat_clear() -> void:
 	board.clear()
 	tiles.clear()
 	tile_colors.clear()
+	_hat_peak_holes.clear()
 	_cube_star_tiles.clear()
 	_is_cube = false
 	_is_kite = false
@@ -13728,8 +14397,11 @@ func generate_hat() -> void:
 	rng.seed = _rand_seed
 	var target: int = _hat_target
 	if is_rand:
-		# 爱因斯坦随机档用自己的目标（hat_rand_tiles，240~300 窗口），不用全局 random_target_tiles
-		target = maxi(20, hat_rand_tiles + rng.randi_range(-random_tile_jitter, random_tile_jitter))
+		# ★ 2026-11-07：菜单已删「爱因斯坦随机」项；下面这档只服务旧 RANDOM / CLI / AI 仪器
+		#   旧 RANDOM 档仍用爱因斯坦专用窗口（hat_rand_tiles 240~300）——
+		#   **旧口径一个字不动**（`--randtest` 的帽子区间判据就是按它写的）。
+		target = _random_shape_target(rng) if _rand_target_override > 0 \
+			else maxi(20, hat_rand_tiles + rng.randi_range(-random_tile_jitter, random_tile_jitter))
 		_rand_target = target
 
 	# 1) 池 + 池内邻接 + 池形心（池的**片数与拓扑与种类无关**，只有坐标被边长线性缩放）
@@ -13819,11 +14491,31 @@ func generate_hat() -> void:
 	_hat_trim_banned = 0
 	_hat_trim_aborted = 0
 	_hat_round_swaps = 0
-	var sel: Array = _hat_pick(padj_u, seed_tile, target, _hat_dist_field(padj_u, seed_tile))
+	var sel: Array = _hat_pick(padj_u, seed_tile, target, _hat_dist_field(padj_u, seed_tile), rcents)
 	if sel.size() < target:                 # 种子贴边 → 池不够，退回中心片重来
 		seed_tile = center_tile
-		sel = _hat_pick(padj_u, center_tile, target, dc)
+		sel = _hat_pick(padj_u, center_tile, target, dc, rcents)
 	_hat_seed_tile = seed_tile
+
+	# 2.5) 削峰（可关，见 `hat_peak_trim` / `_hat_peak_trim()`）：抠掉一部分高气数落子点，
+	#   把平均气数从 ~4.9 压向四方盘的 4。
+	#   ★ 必须放在**装配之前**（`adjacency` 是装配产物），且只用池邻接的组合量 ⇒ 不消耗 rng
+	#     （随机档的随机数流与关掉本功能时逐位一致）、三档抠出的洞逐位相同。
+	var trim_n: int = 0
+	var peak_holes: Array = []
+	if hat_peak_trim and not _hat_peak_suspend:
+		var sel_before: Array = sel.duplicate()
+		sel = _hat_peak_trim(padj_u, sel, hat_peak_floor_deg, hat_peak_min_deg, hat_peak_max_frac)
+		trim_n = sel_before.size() - sel.size()
+		if trim_n > 0:
+			# 被抠掉的那些池索引 —— 只给绘制用（画成压暗的坑底），规则侧一概不认它们
+			var kept: Dictionary = {}
+			for v in sel:
+				kept[int(v)] = true
+			for v in sel_before:
+				if not kept.has(int(v)):
+					peak_holes.append(int(v))
+	_hat_peak_removed = trim_n
 
 	# 3) 装配（随机档再整体转一个随机朝向）
 	# ★ 顶点号**沿用池的合并结果**（上面那份 `vd`），不在这里用 `_kite_vid` 重按坐标合一遍。
@@ -13848,7 +14540,33 @@ func generate_hat() -> void:
 			ids.append(int(vmap[pvid]))
 		tiles.append(ids)
 		tile_colors.append(fat_color)
+	# 削峰凹坑：把被抠掉的瓦片也映射成**顶点索引**（只给绘制用）。
+	# ★ 这些顶点一定已由相邻瓦片登记过（洞的每条边都被邻居共享）⇒ `vmap.has()` 恒真、
+	#   `vlist` 不会多出点 ⇒ 不影响任何几何量（最小内切半径 / 最近点间距 / 星位）。
+	#   `else` 分支纯属保险：宁可多一个只给坑用的顶点，也不要在绘制时越界。
+	for h in peak_holes:
+		var hrow: Array = vid_all[int(h)]
+		var hids: Array[int] = []
+		for pv in hrow:
+			var hpv: int = int(pv)
+			if not vmap.has(hpv):
+				vmap[hpv] = vlist.size()
+				vlist.append((reps_all[hpv] as Vector2).rotated(rot))
+			hids.append(int(vmap[hpv]))
+		_hat_peak_holes.append(hids)
 	vertices = vlist
+
+	# 3.5) 洞**均分给相邻格**（可关，见 `hat_peak_fill_holes`）：盘面上彻底没有洞。
+	#   ★ 位置必须在装配之后（要 tiles/vertices 的真实索引）、`_adapt_to_screen()` 之前
+	#     （`_rebuild_edge_map()` / `_compute_tile_metrics()` 都在那里按最终几何重建）。
+	#   ★ 成功并进之后清空 `_hat_peak_holes` —— 画面上已经没有要画的东西了。
+	_hat_peak_merge_bad = 0
+	_hat_peak_filled = 0
+	if hat_peak_trim and not _hat_peak_suspend and hat_peak_fill_holes and not peak_holes.is_empty():
+		var filled: int = _hat_fill_holes(padj_u, sel, peak_holes)
+		if filled > 0:
+			_hat_peak_holes.clear()
+			_hat_peak_filled = filled
 
 	# 4) 邻接：**直接把「池邻接」映射成棋盘格号**，不再自己按顶点 id 重算一遍。
 	#
@@ -13879,15 +14597,22 @@ func generate_hat() -> void:
 	# 5) 归心 → 星位（顺序不能反：星位是绕**原点**分 6 扇区取的，选区形心不在原点会有扇区踩空）
 	_center_board_on_origin()
 	_cube_star_tiles = _snow_star_current()
+	_hat_area_last = _hat_area_sum()
 	var rot_txt: String = (" | 朝向=" + str(snappedf(_hat_rot_deg, 1)) + "°") if is_rand else ""
+	var trim_txt: String = (" | 削峰=" + str(trim_n) + " 格") if hat_peak_trim else ""
+	if _hat_peak_filled > 0:
+		trim_txt += " | 均分=" + str(_hat_peak_filled) + "块" + ("（多块 " + str(_hat_peak_merge_bad) + "）" if _hat_peak_merge_bad > 0 else "")
 	# ★ 横幅里带上「连通块数」必须恒为 1：用户报的「同色相邻棋子判为不连」正是它不等于 1 的症状 ——
 	#   以后再出这类问题，看一行日志就能定位，不用猜。O(N)，开销可忽略。
 	print("生成爱因斯坦棋盘（", _hat_kind_name(kind), "）池=", _hat_pool_level, " 层（", _hat_pool_size, " 片）| 种子片=", seed_tile,
-		" | 目标=", target, " 实际=", tiles.size(), " 落子格", rot_txt,
+		" | 目标=", target, " 实际=", tiles.size(), " 落子格", trim_txt, rot_txt,
 		" | 顶点=", vertices.size(), " | 星位=", _cube_star_tiles.size(),
 		" | 换片=", _hat_round_swaps,
 		" | 连通=", _component_count(),
 		" | 耗时=", Time.get_ticks_msec() - t0, "ms")
+	# 削峰后的气数直方图（诊断一行；抠掉高气点后 6 气占比应明显下降，见 `_hat_peak_trim()`）
+	if hat_peak_trim and trim_n > 0:
+		print("[hat] 削峰后气数直方图：", _adj_histogram())
 
 
 ## 「8 块筝形」判定（--hattest ①，**定义级**判据）：帽子按定义是筝形 polykite。
@@ -14166,10 +14891,212 @@ func _adj_edge_consistency(tls: Array = []) -> int:
 ##      星位 7（归心之后取，否则扇区会踩空）/ 连通 / 共边一致；
 ##   ⑥ **跨档同构**：同一颗种子下三档的「格数 + 邻接度直方图」必须逐位相同 ——
 ##      种类只换边长、不换拓扑。这一条就是把「三档共用同一份池/装配/邻接代码」钉死的地方。
+## 当前盘面的气数统计：[平均气数, ≥6 气点占比(%), ≤3 气点占比(%), 格数, 最大气数]
+## （削峰自检用；只读 `adjacency` = 装配产物，不重实现任何被测逻辑）
+func _hat_deg_stats() -> Array:
+	var n: int = tiles.size()
+	if n <= 0:
+		return [0.0, 0.0, 0.0, 0, 0]
+	var total := 0
+	var hi := 0
+	var lo := 0
+	var mx := 0
+	for i in n:
+		var d: int = (adjacency[i] as Array).size()
+		total += d
+		mx = maxi(mx, d)
+		if d >= 6:
+			hi += 1
+		if d <= 3:
+			lo += 1
+	return [float(total) / float(n), 100.0 * float(hi) / float(n),
+		100.0 * float(lo) / float(n), n, mx]
+
+
+## 削峰自检（--hatpeaktest）。
+##
+## 削峰 = **装配后的后处理**：抠掉一部分高气数落子点，把平均气数从 ~4.9 压向四方盘的 4。
+## 它必然在盘内留下凹坑 ⇒ 会拉低凸包填充率，所以**不并进 `--hattest` ⑤**（那里考的是选盘形状），
+## 在这里独立验收，且每条判据都配阴性对照 —— 否则「一格都没抠」也能"通过"。
+func _hat_peak_self_test() -> void:
+	var ok := true
+	var saved_kind: int = GameConfig.hat_kind
+	var saved_size: int = GameConfig.board_size
+	var saved_suspend: bool = _hat_peak_suspend
+	var saved_on: bool = hat_peak_trim
+	var saved_floor: int = hat_peak_floor_deg
+	var saved_min: int = hat_peak_min_deg
+	var saved_frac: float = hat_peak_max_frac
+	GameConfig.hat_kind = GameConfig.HAT_HAT
+	GameConfig.board_size = GameConfig.RANDOM
+	_apply_board_size(GameConfig.RANDOM)
+	_hat_peak_suspend = false
+	_rand_seed = 20201104
+
+	# ---------- ① 开 vs 关（同种子）：唯一差别就是削峰 → 这是配对比较，不是跨样本比 ----------
+	# 期望值来源（精确参考实现，200 片圆补丁 × 5 颗种子，脚本 `_trim_tradeoff.py`）：
+	#   ≥6 气点 42% → 10%；平均 4.92 → 4.31；≤3 气点 14% → 13%（**不增**，这正是紧约束的卖点）。
+	# 门槛都留了余量，不卡在实测值上。
+	print("[hatpeaktest] ===== ① 削峰 开/关（同种子 %d，随机档）=====" % _rand_seed)
+	hat_peak_trim = false
+	generate_hat()
+	var off: Array = _hat_deg_stats()
+	var area_off: float = _hat_area_last
+	hat_peak_trim = true
+	generate_hat()
+	var on: Array = _hat_deg_stats()
+	var area_on: float = _hat_area_last
+	var cut: int = _hat_peak_removed
+	var cut_pct: float = 100.0 * float(cut) / maxf(float(off[3]), 1.0)
+	print("[hatpeaktest] ① 关：格数 %d 平均气数 %.2f ≥6气 %.0f%% ≤3气 %.0f%%"
+		% [int(off[3]), float(off[0]), float(off[1]), float(off[2])])
+	print("[hatpeaktest] ① 开：格数 %d 平均气数 %.2f ≥6气 %.0f%% ≤3气 %.0f%% | 抠掉 %d 格（%.1f%%）"
+		% [int(on[3]), float(on[0]), float(on[1]), float(on[2]), cut, cut_pct])
+	var c_peak: bool = float(off[1]) >= 35.0 and float(on[1]) <= 15.0
+	var c_mean: bool = float(off[0]) >= 4.70 and float(on[0]) <= 4.60
+	var c_low: bool = float(on[2]) <= float(off[2]) + 1.0
+	var c_conn: bool = _component_count() == 1
+	var c_frac: bool = cut > 0 and cut_pct <= hat_peak_max_frac * 100.0 + 0.5
+	if not (c_peak and c_mean and c_low and c_conn and c_frac):
+		ok = false
+	print("[hatpeaktest] ① 削平 %s ≥6气点 关 %.0f%% → 开 %.0f%%（要求 关≥35 且 开≤15）"
+		% ["✓" if c_peak else "✗", float(off[1]), float(on[1])])
+	print("[hatpeaktest] ① 降均 %s 平均气数 关 %.2f → 开 %.2f（要求 关≥4.70 且 开≤4.60）"
+		% ["✓" if c_mean else "✗", float(off[0]), float(on[0])])
+	print("[hatpeaktest] ① 不伤人 %s ≤3气点占比 关 %.0f%% → 开 %.0f%%（要求 开 ≤ 关+1pt）"
+		% ["✓" if c_low else "✗", float(off[2]), float(on[2])])
+	print("[hatpeaktest] ① 连通 %s 块数 %d（须 1）| 抠点比例 %s %.1f%%（须 >0 且 ≤上限 %.0f%%）"
+		% ["✓" if c_conn else "✗", _component_count(),
+			"✓" if c_frac else "✗", cut_pct, hat_peak_max_frac * 100.0])
+	print("[hatpeaktest] ① 开：%s" % _adj_histogram())
+	# ---------- ⑧ 均分洞的几何验收（只在本功能开着时才有意义）----------
+	#   判据 A **面积守恒**：均分不改盘形，只是把洞的空间重新划分给邻居 ⇒ 削峰盘的格子面积之和
+	#     必须与同种子「不削峰」盘相等（容差 0.5%，留给 Clipper 多块残缝）。
+	#     ★ 这是「盘面无缝无叠」最硬的一条：留缝 → 面积少；重叠 → 面积多。
+	#   判据 B `_adj_edge_consistency() == 0`：邻接表里每一对邻居在几何上真的共边。均分后邻居多出
+	#     新顶点，若没按容差合上，这里立刻红 —— 和「同色相邻棋子不画共享边」静默失效是同一个病根。
+	#   判据 C `_hat_peak_merge_bad == 0`：不该有「只与洞相切、没有面积可分」的邻居
+	#     （段长 1 / 整环贴洞）。>0 说明兜底分支被触发过，分割结果要复核。
+	if hat_peak_fill_holes:
+		var c_area: bool = absf(area_on - area_off) <= maxf(area_off, 1.0) * 0.005
+		var ecr: int = _adj_edge_consistency()
+		var bad_merge: int = _hat_peak_merge_bad
+		var c8: bool = c_area and ecr == 0 and bad_merge == 0
+		if not c8:
+			ok = false
+		print("[hatpeaktest] ⑧ 均分验收 %s 面积 关 %.2f → 开 %.2f（差 %.3f%%，须 ≤0.5%%）| 邻接共边不一致 %d 对（须 0）| 只相切 %d 次（须 0）| 并进 %d 块"
+			% ["✓" if c8 else "✗", area_off, area_on,
+				100.0 * absf(area_on - area_off) / maxf(area_off, 1.0), ecr, bad_merge, _hat_peak_filled])
+
+
+	# ---------- ② 三档同构（削峰只用组合量 ⇒ 三档抠出的洞必须逐位相同）----------
+	var iso := true
+	var ref_n := -1
+	var ref_hist := ""
+	var ref_cut := -1
+	for kind in [GameConfig.HAT_HAT, GameConfig.HAT_TURTLE, GameConfig.HAT_SPECTRE]:
+		GameConfig.hat_kind = kind
+		generate_hat()
+		var hs: String = _adj_histogram()
+		if ref_n < 0:
+			ref_n = tiles.size()
+			ref_hist = hs
+			ref_cut = _hat_peak_removed
+			if ref_n < 20 or ref_hist == "直方图[]" or ref_cut <= 0:
+				iso = false     # 防「空探针假相等」：参照档本身必须有内容
+			continue
+		if tiles.size() != ref_n or hs != ref_hist or _hat_peak_removed != ref_cut:
+			iso = false
+			print("[hatpeaktest] ② %s 与参照不同：格数 %d/%d 抠点 %d/%d %s"
+				% [_hat_kind_name(kind), tiles.size(), ref_n, _hat_peak_removed, ref_cut, hs])
+	if not iso:
+		ok = false
+	print("[hatpeaktest] ② 三档同构 %s 格数 %d 抠点 %d %s（种类只换边长、不动拓扑）"
+		% ["✓" if iso else "✗", ref_n, ref_cut, ref_hist])
+	GameConfig.hat_kind = GameConfig.HAT_HAT
+
+	# ---------- ③ 阴性对照 A：floor=6 ⇒ 抠任何点都会让邻居跌到 5 ⇒ 必须一格都抠不掉 ----------
+	#   这条证明 `hat_peak_floor_deg` **真的接进了判定逻辑**（旋钮拧不动 = 死参数，§33）。
+	hat_peak_floor_deg = 6
+	generate_hat()
+	var neu: Array = _hat_deg_stats()
+	var cut_neu: int = _hat_peak_removed
+	var c_neu: bool = cut_neu == 0 and absf(float(neu[0]) - float(off[0])) < 1e-6
+	if not c_neu:
+		ok = false
+	print("[hatpeaktest] ③ 阴控 floor=6 %s 抠掉 %d 格（须 0）平均 %.2f（须 = 关盘 %.2f）"
+		% ["✓" if c_neu else "✗", cut_neu, float(neu[0]), float(off[0])])
+
+	# ---------- ④ 阴性对照 B：floor=2（松）⇒ 抠得更多、均气更低，但 ≤3 气点**变多** ----------
+	#   这条同时钉死「为什么默认选紧约束」：松的那档把弱点变多，紧的那档不。
+	hat_peak_floor_deg = 2
+	generate_hat()
+	var loose: Array = _hat_deg_stats()
+	var cut_loose: int = _hat_peak_removed
+	var c_loose: bool = cut_loose > cut and float(loose[0]) < float(on[0]) \
+		and float(loose[2]) > float(on[2])
+	if not c_loose:
+		ok = false
+	print("[hatpeaktest] ④ 阴控 floor=2 %s 抠掉 %d（紧 %d）平均 %.2f（紧 %.2f）≤3气 %.0f%%（紧 %.0f%%）"
+		% ["✓" if c_loose else "✗", cut_loose, cut, float(loose[0]), float(on[0]),
+			float(loose[2]), float(on[2])])
+	hat_peak_floor_deg = saved_floor
+
+	# ---------- ⑤ 阴性对照 C：max_frac=0 ⇒ 保险丝真的能拧死 ----------
+	hat_peak_max_frac = 0.0
+	generate_hat()
+	var cut_zero: int = _hat_peak_removed
+	var c_zero: bool = cut_zero == 0
+	if not c_zero:
+		ok = false
+	print("[hatpeaktest] ⑤ 阴控 max_frac=0 %s 抠掉 %d 格（须 0）" % ["✓" if c_zero else "✗", cut_zero])
+	hat_peak_max_frac = saved_frac
+
+	# ---------- ⑥ 挂起开关有效（自检 ⑤ 就靠它把削峰隔离开）----------
+	_hat_peak_suspend = true
+	generate_hat()
+	var cut_sus: int = _hat_peak_removed
+	var c_sus: bool = cut_sus == 0 and hat_peak_trim
+	if not c_sus:
+		ok = false
+	print("[hatpeaktest] ⑥ 挂起开关 %s 挂起时抠掉 %d 格（须 0，且 hat_peak_trim 仍为 true = %s）"
+		% ["✓" if c_sus else "✗", cut_sus, str(hat_peak_trim)])
+	_hat_peak_suspend = false
+
+	# ---------- ⑦ 复现：同种子同参数两次必须逐位相同（洞的位置也不能飘）----------
+	generate_hat()
+	var fp1: int = _board_fingerprint()
+	var cut1: int = _hat_peak_removed
+	generate_hat()
+	var fp2: int = _board_fingerprint()
+	var cut2: int = _hat_peak_removed
+	var c_rep: bool = fp1 == fp2 and cut1 == cut2 and cut1 > 0
+	if not c_rep:
+		ok = false
+	print("[hatpeaktest] ⑦ 复现 %s 两次指纹 %s / %s，抠点 %d / %d"
+		% ["✓" if c_rep else "✗", str(fp1), str(fp2), cut1, cut2])
+
+	# 还原
+	hat_peak_trim = saved_on
+	hat_peak_floor_deg = saved_floor
+	hat_peak_min_deg = saved_min
+	hat_peak_max_frac = saved_frac
+	_hat_peak_suspend = saved_suspend
+	GameConfig.board_size = saved_size
+	GameConfig.hat_kind = saved_kind
+	_apply_board_size(saved_size)
+	print("[hatpeaktest] 结论：", "通过 ✓" if ok else "失败 ✗")
+	get_tree().quit()
+
+
 func _hat_self_test() -> void:
 	var ok := true
 	var sq3: float = sqrt(3.0)
 	var kinds: Array = [GameConfig.HAT_HAT, GameConfig.HAT_TURTLE, GameConfig.HAT_SPECTRE]
+	# ★ 削峰挂起（见 `_hat_peak_suspend` 的说明）：⑤ 考的是选盘形状 / 最小度，削峰是装配后
+	#   在盘内挖坑的后处理，开着测会把凸包填充率按抠点比例拉红 —— 那是判据被污染。
+	#   削峰由 `--hatpeaktest` 单独验收（含阴性对照）。末尾恢复，且本函数无早退。
+	_hat_peak_suspend = true
 
 	print("[hattest] ===== ① 瓦片模板（三档种类）=====")
 	var areas: Array[float] = []
@@ -14446,7 +15373,11 @@ func _hat_self_test() -> void:
 	# ⑤ 平滑器阴性对照：把「选区平滑」关掉扫同样 8 颗种子 —— 填充谷必须**不高于**开着时，
 	#    且开着时换片数 > 0（机制真的开过火），否则说明平滑器没在干活（探针没牙）。
 	#    种子与主循环 ⑤ 完全同源（3000 + i×7919），填充率差值只来自平滑器本身。
+	# ★ 2026-11-08：圆底换成几何圆盘后，平滑器的增量被噪声淹没（开 0.837 vs 关 0.843 假红）——
+	#   几何圆盘本身就圆，砍在这里量不到东西。所以这一对照**固定在 BFS 圆底档**跑
+	#   （`_hat_radial_mode = 1`）：那正是会出鼓包/凹口的档，平滑器就是为它准备的。
 	_hat_round_mode = 1
+	_hat_radial_mode = 1
 	var fill_off := INF
 	var hull_off := INF
 	for _i in 8:
@@ -14457,16 +15388,19 @@ func _hat_self_test() -> void:
 	_hat_round_mode = 0
 	var fill_on := INF
 	var hull_on := INF
+	var swaps_on := 0
 	for _i in 8:
 		_rand_seed = 3000 + _i * 7919
 		generate_hat()
+		swaps_on = maxi(swaps_on, _hat_round_swaps)
 		fill_on = minf(fill_on, (_rand_shape_metrics() as Array[float])[1])
 		hull_on = minf(hull_on, (_rand_shape_metrics() as Array[float])[2])
-	var rctl_ok: bool = hull_on >= hull_off and round_any > 0
+	_hat_radial_mode = 0
+	var rctl_ok: bool = hull_on >= hull_off and swaps_on > 0
 	if not rctl_ok:
 		ok = false
-	print("[hattest] ⑤ 平滑器对照（同 8 颗种子）：凸包谷 开 %.3f vs 关 %.3f（开须 ≥ 关）| 矩形谷 开 %.2f vs 关 %.2f | 换片 %d → %s"
-		% [hull_on, hull_off, fill_on, fill_off, round_any, "✓" if rctl_ok else "✗（平滑器没干活或没效果）"])
+	print("[hattest] ⑤ 平滑器对照（BFS 圆底档 · 同 8 颗种子）：凸包谷 开 %.3f vs 关 %.3f（开须 ≥ 关）| 矩形谷 开 %.2f vs 关 %.2f | 换片峰 %d → %s"
+		% [hull_on, hull_off, fill_on, fill_off, swaps_on, "✓" if rctl_ok else "✗（平滑器没干活或没效果）"])
 
 	# ⑤ 正面检查（比上面的 8 颗种子更狠）：**默认算法**扫 12 颗种子，每一颗都必须最小度 ≥2。
 	#   种类参数完全不参与选区（选区只用图距离/邻居计数/前沿进入序），所以只测帽子档即可覆盖三档
@@ -14522,6 +15456,7 @@ func _hat_self_test() -> void:
 	GameConfig.board_size = saved_size
 	GameConfig.hat_kind = saved_kind
 	_apply_board_size(saved_size)
+	_hat_peak_suspend = false
 	print("[hattest] 结论：", "通过 ✓" if ok else "失败 ✗")
 	get_tree().quit()
 
@@ -14918,7 +15853,18 @@ func _rand_self_test() -> void:
 			lo = mini(lo, c)
 			hi = maxi(hi, c)
 			sum += c
-		var band_ok: bool = worst_gap <= random_tile_jitter + 6
+		# ★★ 2026-11-06 改口径：容差必须把**削峰**算进去。
+		#   `_hat_peak_trim()` 会在 `hat_peak_max_frac`（默认 0.15）上限内**系统性**抠掉高气数
+		#   落子点 ⇒ 帽子的随机档实测比 `hat_rand_tiles` 少 6~11%。改前判据按
+		#   "目标 ± (jitter+6)" 判 ⇒ 削峰一上线这条就红（实测：目标 270、实际 241~260、
+		#   离目标最远 29 格），而红的原因不是"随机档坏了"，是判据没跟上生成器的新取舍。
+		#   只对帽子盘放宽、且放宽量取削峰上限本身（关掉削峰 ⇒ 回到原口径）。
+		var peak_frac: float = 0.0
+		if bt == GameConfig.BOARD_HAT and hat_peak_trim:
+			peak_frac = hat_peak_max_frac
+		var band_lo: int = int(float(tgt) * (1.0 - peak_frac)) - random_tile_jitter - 6
+		var band_hi: int = tgt + random_tile_jitter + 6
+		var band_ok: bool = lo >= band_lo and hi <= band_hi
 		if not band_ok:
 			ok = false
 		var uniq_ok: bool = fps.size() == n
@@ -14928,8 +15874,8 @@ func _rand_self_test() -> void:
 		var shape_ok: bool = aspect_hi <= 1.6 and fill_lo >= 0.55
 		if not shape_ok:
 			ok = false
-		print("[randtest] %s 目标=%d±%d | 格数 %d~%d 均值 %.1f | 离目标最远 %d 格 %s | 互不相同 %d/%d %s" % [
-			tname, tgt, random_tile_jitter, lo, hi,
+		print("[randtest] %s 目标=%d±%d | 容许 %d~%d | 格数 %d~%d 均值 %.1f | 离目标最远 %d 格 %s | 互不相同 %d/%d %s" % [
+			tname, tgt, random_tile_jitter, band_lo, band_hi, lo, hi,
 			float(sum) / float(counts.size()), worst_gap, "✓" if band_ok else "✗",
 			fps.size(), n, "✓" if uniq_ok else "✗"])
 		# 「每局开局都换一张盘」：走的是玩家真正会走的路径（restart_game 重抽种子）
@@ -15515,11 +16461,19 @@ var _record_kind: int = GameRecord.KIND_HUMAN
 func _record_generator_fp() -> String:
 	# ★ 占位符与参数**逐个对齐**（改参数时数一遍 `%`）：数目不符时 GDScript 只在
 	#   **运行到这一行**时报 `validated_evaluate`，而自检若不调它就是**零信号**。
-	return "t%d|s%d|it%d|c%.4f|rt%d|rj%.1f|rw%.3f|pr%d|pm%d|kh%d|ch%d|ht%d|sr%d|hq%d|seed=%08x" % [
+	# ★★ 2026-11-06：新增 `rs%d`（= `board_random_shape`）。
+	#   为什么必须进指纹：同一颗种子在「固定几何」与「随机形状」两条路上会生成**两张不同的盘**，
+	#   而上面那些参数（it/clip/环数/层数/hat 目标）两条路上**完全相同** ⇒ 不加这一位，
+	#   复盘会把"随机盘"的谱重放成一张固定盘，且指纹校验照样通过（静默编故事）。
+	#   ⚠️ 代价：加这一位会让**所有旧谱**的指纹不再匹配 ⇒ 旧谱复盘被拒。
+	#     这与本工程既有口径一致（"改了生成器哪怕一个 ε 后旧谱会重放出另一张盘 ⇒ 拒绝加载"），
+	#     宁可拒载也不编故事。
+	return "t%d|s%d|it%d|c%.4f|rt%d|rj%.1f|rw%.3f|pr%d|pm%d|kh%d|ch%d|ht%d|sr%d|hq%d|rs%d|seed=%08x" % [
 		GameConfig.board_type, GameConfig.board_size, iterations, clip_radius,
 		random_target_tiles, random_tile_jitter, random_window_offset,
 		1 if penrose_random_seed_rot else 0, 1 if penrose_random_seed_mirror else 0,
 		_hat_kind_used, _cube_hex_r, _hat_target, _snow_r_actual, _hat_pool_size,
+		1 if GameConfig.board_random_shape else 0,
 		_rand_seed,
 	]
 
@@ -15529,7 +16483,8 @@ func _record_begin() -> void:
 	_record_gen_fp = _record_generator_fp()
 	_record = GameRecord.new_record(
 		game_mode, GameConfig.board_type, GameConfig.board_size,
-		_rand_seed, komi, _record_gen_fp, _record_players(), _record_kind)
+		_rand_seed, komi, _record_gen_fp, _record_players(), _record_kind,
+		GameConfig.board_random_shape)
 
 ## 对局双方的名字。联机取 Steam 名（拿不到就退回"对手"）—— ★ 不写进谱**不影响重放**
 ##   （重放只靠盘型 + 种子 + 手数），但写上才有"这盘是谁下的"的可读性。
@@ -15734,6 +16689,13 @@ func place_stone(tile_id: int, animate: bool = true) -> bool:
 	# ★ 局势刷新：胜负已定、turn 已换 ⇒ 这时算出来的领先/危急才是新局面的。
 	#   只读（`analyze_board` 不改棋盘），且它自带 `_sc_id` 缓存。
 	_refresh_analyze()
+	# ★ AI 台词（2026-11-02）：**两边落子都过这里**——台词是"AI 对这个局面的反应"，
+	#   不只是它自己下完才开口（玩家屠了它的龙，它当然该有反应）。
+	# ★ 探测落子（`_quiet_place`）必须排除：`_random_legal_move()` 每探一个合法点就真调一次性
+	#   本函数，不挡的话 AI 每探一次就把台词池抽一遍 —— 与 `_clk.on_move()` 那条守卫同一个病。
+	# ★ 必须排在 `_refresh_analyze()` **之后**：台词读的是 `an_*`，早一步读到的就是上一手的局势。
+	if not _quiet_place:
+		_maybe_taunt(mover_color)
 	return true
 
 
@@ -16087,6 +17049,76 @@ func _yema_pin(eng: AIEngine) -> void:
 	eng.root_width = 12
 
 
+## `--yematest` ⑥b 用的**单模式**钩子探针：同一局面、同一 seed，只让
+## `ext_prior_after_prune` 不同，比较"关先验"与"开先验（w=1，完全采用外部排序）"。
+##
+## ★ 抽成函数而不是在自检里写两遍：两种混合模式各要量一遍（§143 只验一档 = 没验另一档），
+##   而写两遍必然有一天只改歪其中一遍（§8 一处写一处读）。
+## ★ `w = 1.0` 是刻意的：这条判据量的是**接线**，不是棋力。w=1 让网络完全接管排序 ⇒
+##   钩子没生效 / 被挪到别的阶段一眼可见；用 0.3 时"只动了几位"与"完全没接上"会撞车。
+## ★ `n_empty` / `rw` 是**有效分母**：剪枝必须真的裁过，否则"集合相同/不同"都是废话（§106）。
+## ★ `ord_moved = -1` 表示**给不出读数**（候选集换了人 ⇒ 两张 `priors` 的下标不指向同一个点）。
+##   这种情况必须印成 n/a，不能算一个数出来冒充读数（§110 参照物不同源）。
+func _yema_hook_probe(board: Dictionary, pri: PackedFloat32Array, after_prune: bool) -> Dictionary:
+	var e_on := AIEngine.new()
+	e_on.setup(adjacency, AI_COLOR, 20261023)
+	_yema_pin(e_on)
+	e_on.ext_prior = pri
+	e_on.w_external_prior = 1.0
+	e_on.ext_prior_after_prune = after_prune
+	var r_on: Dictionary = e_on.prepare_root_for_dump(board, -1)
+	var e_off := AIEngine.new()
+	e_off.setup(adjacency, AI_COLOR, 20261023)
+	_yema_pin(e_off)
+	e_off.w_external_prior = 0.0
+	var r_off: Dictionary = e_off.prepare_root_for_dump(board, -1)
+	var c_on: Array = r_on["cands"]
+	var c_off: Array = r_off["cands"]
+	var set_off := {}
+	for v in c_off:
+		set_off[int(v)] = true
+	var set_on := {}
+	for v in c_on:
+		set_on[int(v)] = true
+	var only_on := 0
+	for v in c_on:
+		if not set_off.has(int(v)):
+			only_on += 1
+	var only_off := 0
+	for v in c_off:
+		if not set_on.has(int(v)):
+			only_off += 1
+	# 内部名次变动：只在**候选集逐点相同**时才有意义。`_mix_external_prior()` 只原地改
+	# `scores`、`_prepare_root()` 之后不再排序 ⇒ 集合相同时两张 `priors` 的下标指向同一个点。
+	var ord_moved := -1
+	if only_on + only_off == 0:
+		var p_on: Array = r_on["priors"]
+		var p_off: Array = r_off["priors"]
+		if p_on.size() == p_off.size() and p_on.size() > 1:
+			var o_on: Array[int] = []
+			var o_off: Array[int] = []
+			for i in p_on.size():
+				o_on.append(i)
+				o_off.append(i)
+			o_on.sort_custom(func(a: int, b: int) -> bool: return p_on[a] > p_on[b])
+			o_off.sort_custom(func(a: int, b: int) -> bool: return p_off[a] > p_off[b])
+			ord_moved = 0
+			for i in o_on.size():
+				if o_on[i] != o_off[i]:
+					ord_moved += 1
+	var n_empty := 0
+	for v in board.keys():
+		if int(board[v]) == 0:
+			n_empty += 1
+	return {
+		"n_off": c_off.size(), "n_on": c_on.size(),
+		"only_on": only_on, "only_off": only_off,
+		"ord_moved": ord_moved,
+		"n_empty": n_empty,
+		"rw": int(e_off._effective_root_width(n_empty)),
+	}
+
+
 ## 仪器：`--nnprobe=权重.json,golden.json`（2026-10-26）。
 ##
 ## 验三件事，缺一不可：
@@ -16098,6 +17130,144 @@ func _yema_pin(eng: AIEngine) -> void:
 ##   （特征一样、权重形状也对），只有分数不同 —— 而分数不同不报错，
 ##   在实战里只会表现成"引擎好像没变强"，那种错追不出来。
 ## ★ 退出码：0 全绿 / 1 对拍不一致 / 2 权重加载失败。脚本里能直接判。
+## 自检（--valuetest）：价值网络 GDScript 侧 vs Python golden 的**两层**对拍（2026-11-07）。
+##
+## 【为什么必须有它】`nn_value.gd` 是 `nn_value.py::ValueGNN.forward` 的重写。重写就有分叉，
+##   而分叉**不会报错**：权重照样加载、数照样出，只是偏一个常数或倍数。
+##   本轮就真踩到一次同型分叉：核对脚本只喂了单向邻接边，期望值偏 **7~27 目**，
+##   而程序一声不响照样跑完（§70 判据不许重实现被测逻辑 / §138 两面各有一把刀）。
+##
+##   **两面刀**：
+##     ① 拓扑：`deg` / `d_rim` 与 golden 逐点一致。少了这一面，"特征对上了但盘缘定义不同"
+##        这种分叉会躲过前向对拍（两边都算错、错得一样，看不出来）。
+##     ② 前向：每个局面的预测与 golden 差 < `VALUE_TOL` 目。
+##   外加**耗时**读数（µs/次）——它决定"能不能在每次模拟的叶子上都跑一次"，
+##   是接进 `_playout()` 之前必须先量的数（`nn_value.py` 报告里点名要求先定这件事）。
+##
+## 【参照物为什么可信】golden 由 `nn/export_value_golden.py` 生成，那份脚本用**独立实现**
+##   读同一份 `value_weights.json` 算前向，并已与 torch 原模型 `state.pt` 双向核对
+##   （24 个局面最大绝对差 1.5e-5）⇒ 不是"用被测物验被测物"（§110）。
+const VALUE_TOL := 0.05
+
+func _value_test(arg: String) -> void:
+	var parts := arg.split(",")
+	if parts.size() < 2:
+		print("[valuetest] ✗ 用法：--valuetest=权重.json,golden.json")
+		get_tree().quit(2)
+		return
+	var wpath := parts[0].strip_edges()
+	var gpath := parts[1].strip_edges()
+	var bad: Array = []
+
+	var gtxt := FileAccess.get_file_as_string(gpath)
+	if gtxt == "":
+		print("[valuetest] ✗ golden 读不到：%s" % gpath)
+		print("[valuetest] 结论：失败 ✗ %s" % str(["golden 缺失"]))
+		get_tree().quit(2)
+		return
+	var gd: Variant = JSON.parse_string(gtxt)
+	if typeof(gd) != TYPE_DICTIONARY:
+		print("[valuetest] ✗ golden 不是 JSON 对象：%s" % gpath)
+		print("[valuetest] 结论：失败 ✗ %s" % str(["golden 损坏"]))
+		get_tree().quit(2)
+		return
+	if String(gd.get("kind", "")) != "value_golden":
+		print("[valuetest] ✗ golden kind=%s，不是 value_golden" % String(gd.get("kind", "")))
+		print("[valuetest] 结论：失败 ✗ %s" % str(["golden 类型不对"]))
+		get_tree().quit(2)
+		return
+
+	# ---- 用 golden 里的边表重建拓扑（判据不依赖当前盘型生成器 ⇒ 盘型换了也不影响这条闸）
+	var gn := int(gd["n"])
+	var gedges: Array = gd["edges"]
+	var adj_v: Array[PackedInt32Array] = []
+	adj_v.resize(gn)
+	for i in gn:
+		adj_v[i] = PackedInt32Array()
+	for e in gedges:
+		var pair: Array = e
+		var u := int(pair[0])
+		var w := int(pair[1])
+		adj_v[u].append(w)
+		adj_v[w].append(u)
+
+	var vn := NnValue.new()
+	vn.setup(adj_v)
+	if not vn.load_weights(wpath):
+		print("[valuetest] ✗ 权重加载失败：%s（%s）" % [wpath, vn.err])
+		print("[valuetest] 结论：失败 ✗ %s" % str(["权重"]))
+		get_tree().quit(2)
+		return
+	print("[valuetest] ① 盘 n=%d 边=%d h=%d 层=%d 权重=%s" % [
+		vn.n, gedges.size(), vn.h_dim, vn.layers, wpath.get_file()])
+
+	# ---- 刀①：拓扑
+	var gdeg: Array = gd["deg"]
+	var grim: Array = gd["d_rim"]
+	var deg_bad := 0
+	var rim_bad := 0
+	for i in gn:
+		if vn.deg[i] != int(gdeg[i]):
+			deg_bad += 1
+		if vn.d_rim[i] != int(grim[i]):
+			rim_bad += 1
+	if deg_bad != 0:
+		bad.append("deg 差 %d 点" % deg_bad)
+	if rim_bad != 0:
+		bad.append("d_rim 差 %d 点" % rim_bad)
+	if deg_bad == 0 and rim_bad == 0:
+		print("[valuetest] ② 拓扑对拍 ✓ deg %d/%d · d_rim %d/%d" % [gn, gn, gn, gn])
+	else:
+		print("[valuetest] ② 拓扑对拍 ✗ deg 差 %d/%d · d_rim 差 %d/%d" % [deg_bad, gn, rim_bad, gn])
+
+	# ---- 刀②：前向
+	var cases: Array = gd["cases"]
+	if cases.size() < 8:
+		bad.append("golden 局面只有 %d 个（<8 ⇒ 覆盖不足）" % cases.size())
+	var worst := 0.0
+	var worst_ply := -1
+	var n_bad_case := 0
+	for c in cases:
+		var st := String(c["state"])
+		if not vn.set_state_string(st):
+			n_bad_case += 1
+			continue
+		var pred := vn.value_of(int(c["ply"]), int(c["color"]))
+		var d := absf(pred - float(c["pred"]))
+		if d > worst:
+			worst = d
+			worst_ply = int(c["ply"])
+		if d > VALUE_TOL:
+			n_bad_case += 1
+	if n_bad_case != 0:
+		bad.append("前向 %d 局面超阈" % n_bad_case)
+	if n_bad_case == 0:
+		print("[valuetest] ③ 前向对拍 ✓ %d 局面 最大差 %.6f 目" % [cases.size(), worst])
+	else:
+		print("[valuetest] ③ 前向对拍 ✗ %d/%d 局面超阈 最大差 %.6f 目·ply=%d" % [
+			n_bad_case, cases.size(), worst, worst_ply])
+
+	# ---- 耗时：它决定"能不能每个叶子跑一次"，必须印出来（不是判定项，但没它没法上线）
+	var reps := 200
+	var c0: Dictionary = cases[0]
+	vn.set_state_string(String(c0["state"]))
+	var p0 := int(c0["ply"])
+	var col0 := int(c0["color"])
+	var t0 := Time.get_ticks_usec()
+	for i in reps:
+		vn.value_of(p0, col0)
+	var us := float(Time.get_ticks_usec() - t0) / float(reps)
+	print("[valuetest] ④ 耗时 %.1f µs/次 · n=%d · 即每 150 次模拟需 %.0f ms" % [
+		us, vn.n, us * 150.0 / 1000.0])
+
+	if bad.is_empty():
+		print("[valuetest] 结论：通过 ✓ []")
+		get_tree().quit()
+	else:
+		print("[valuetest] 结论：失败 ✗ %s" % str(bad))
+		get_tree().quit(1)
+
+
 func _nn_probe(arg: String) -> void:
 	var parts := arg.split(",")
 	if parts.size() < 2:
@@ -16319,59 +17489,80 @@ func _yema_smoke_test() -> void:
 	print("[yematest] ⑥ 跨引擎合法性：异常 %d 处%s" % [
 		cross_bad.size(), "" if cross_bad.is_empty() else " " + str(cross_bad)])
 
-	# ---- ⑥b 钩子位置：网络必须能改变"**哪些**候选进搜索" ----
-	# ★★ 为什么单列（这是本次接入最容易犯、最难看出来的一处）：
-	#   `_prepare_root()` 里的 Top-K 剪枝本身就是"按 `scores` 排序取前 K 个"。
-	#   把 `_mix_external_prior()` 放在剪枝**之后**，网络就只改内部顺序、对**候选集毫无影响**
-	#   —— 而 ④（混合发生了）与 ⑤（根层首选变了）**照样全绿**，日志一切正常，
-	#   只是"网络本来能救回来的候选永远进不了搜索"。
-	# 判据：同一局面、同参数下，`w=1` 与 `w=0` 两次 `_prepare_root()` 的**候选集**必须不同。
-	#   走的是真源 `prepare_root_for_dump()`（不搜索、秒级、与 `choose_move` 同一调用序列）。
-	# ★ 元断言（§106）：候选集只有 `< root_width` 个时剪枝根本没裁剪 ⇒ "候选集不变"是废话
-	#   ⇒ 这种情况**报红**，不许当通过。
+	# ---- ⑥b 钩子位置：两档混合模式**各验一遍**"网络到底该不该换候选集" ----
+	# ★★ 2026-11-06 重写（原来是一条单向断言："网络必须能改变候选集"）。
+	#   为什么改：那条断言建立在"网络影响候选集 = 好事"的假设上，而 `--yemaduel` 实测
+	#   （170 格 / pw=100 / 换色）把这个假设推翻了 ——
+	#     · 剪枝前混合：w=0.1 / 0.3 / 0.5 / 1.0 ⇒ 12.5% / 12.5% / 6.3% / 0%（对纯磐石）
+	#     · 剪枝后混合：w=0.3 ⇒ **31.3%**（两批合并 32 局 28.1%）
+	#   而 `w=0` 阴性对照 7:9（z=−0.50，未定）⇒ 仪器无偏。
+	#   ⇒ **换候选集是伤害的来源，不是"能力"**；默认已改成 `nn_after_prune = true`。
+	#   新判据**两档都量、各自断言自己的语义**（只验一种等于没验另一种，§143）：
+	#     · 剪枝前模式：候选集**必须不同**（否则钩子被挪到剪枝后 ⇒ 静默失效，老事故）；
+	#     · 剪枝后模式：候选集**必须完全相同**（否则"只重排内部"没生效）
+	#                   且内部名次**必须**变（否则等于没接上）。
+	#   两档共用一条元断言：关先验的候选集必须**真的被裁剪过**（候选集 < 空点数），
+	#   否则"集合相同/不同"都是废话（§106 有效分母）。
 	var b9: Dictionary = _yema_boards[0].duplicate()
 	var st9 := 0
 	for v in b9.keys():
 		if int(b9[v]) != 0:
 			st9 += 1
 	var pri9: PackedFloat32Array = _yema_nn.nn.score_points(b9, AI_COLOR, st9, -1)
-	var e_on := AIEngine.new()
-	e_on.setup(adjacency, AI_COLOR, 20261023)
-	_yema_pin(e_on)
-	e_on.ext_prior = pri9
-	e_on.w_external_prior = 1.0
-	var r_on: Dictionary = e_on.prepare_root_for_dump(b9, -1)
-	var e_off2 := AIEngine.new()
-	e_off2.setup(adjacency, AI_COLOR, 20261023)
-	_yema_pin(e_off2)
-	e_off2.w_external_prior = 0.0
-	var r_off: Dictionary = e_off2.prepare_root_for_dump(b9, -1)
-	var c_on: Array = r_on["cands"]
-	var c_off: Array = r_off["cands"]
-	var set_off := {}
-	for v in c_off:
-		set_off[int(v)] = true
-	var set_on := {}
-	for v in c_on:
-		set_on[int(v)] = true
-	var only_on := 0
-	for v in c_on:
-		if not set_off.has(int(v)):
-			only_on += 1
-	var only_off := 0
-	for v in c_off:
-		if not set_on.has(int(v)):
-			only_off += 1
+	var mode_after: bool = _yema_nn.nn_after_prune
+	# 两种模式**都量**：`nn_after_prune` 是 @export，翻一下就走到另一条分支 ⇒
+	# 只验当前默认那一档 = 另一档完全没验（§143）。
+	# `mode_after` 只用于在报告里标"当前生效的是哪一档"，不参与判绿。
+	var pa: Dictionary = _yema_hook_probe(b9, pri9, true)
+	var pb: Dictionary = _yema_hook_probe(b9, pri9, false)
+	var probes: Array = [["剪枝后", pa], ["剪枝前", pb]]
 	var pos_bad: Array[String] = []
-	if c_off.size() < 12:
-		pos_bad.append("关先验候选集只有 %d 个（< root_width 12）⇒ 剪枝没生效，本条无分辨力" % c_off.size())
-	elif only_on + only_off == 0:
-		pos_bad.append("开/关先验的根候选集**完全相同**（%d 个）⇒ 钩子在剪枝之后" % c_on.size())
+	# ---- 元断言：剪枝必须**真的裁过**，否则"集合相同/不同"全是废话（§106）----
+	# ★★ 2026-11-06 第一版写的是 `c_off.size() >= root_width` ⇒ **误红**：
+	#   `root_width` 是**上限**，72 个空点裁到恰好 12 个（= 上限）正是它正常工作的样子，
+	#   判据却把"剪枝完好"读成"剪枝没生效"（§71 判据与数据矛盾先疑判据）。
+	#   正确分母是**空点数**：候选集等于空点集才算一点没裁；上限由
+	#   `_effective_root_width()` 现算，不抄它的算式（§70）。
+	var res: Array[bool] = []
+	for pr in probes:
+		var nm: String = pr[0]
+		var d: Dictionary = pr[1]
+		var n_off: int = int(d["n_off"])
+		var n_empty: int = int(d["n_empty"])
+		var rw: int = int(d["rw"])
+		var ok := true
+		if n_off >= n_empty:
+			pos_bad.append("%s：关先验候选集 %d 个 = 空点 %d 个 ⇒ 剪枝一点没裁，本条无分辨力"
+				% [nm, n_off, n_empty])
+			ok = false
+		elif n_off > rw:
+			pos_bad.append("%s：候选集 %d 个 > 根宽上限 %d ⇒ 剪枝没按上限收" % [nm, n_off, rw])
+			ok = false
+		res.append(ok)
+	# ---- 剪枝后：候选集必须**完全相同**，且内部名次**必须**变 ----
+	# 集合变了 ⇒ 混合没被推迟到剪枝之后（开关接错）；
+	# 名次没变 ⇒ 网络等于没接上（老事故：以为在下野马，其实在下磐石）。
+	if res[0]:
+		if int(pa["only_on"]) + int(pa["only_off"]) != 0:
+			pos_bad.append("剪枝后模式却换掉了候选集（换进 %d / 换出 %d）⇒ 混合没被推迟到剪枝之后"
+				% [pa["only_on"], pa["only_off"]])
+		elif int(pa["ord_moved"]) <= 0:
+			pos_bad.append("剪枝后模式候选集没变、内部顺序也没变 ⇒ 网络等于没接上")
+	# ---- 剪枝前：候选集**必须不同**（否则钩子被挪到剪枝后 ⇒ 静默失效）----
+	if res[1]:
+		if int(pb["only_on"]) + int(pb["only_off"]) == 0:
+			pos_bad.append("剪枝前模式候选集**完全相同**（%d 个）⇒ 钩子被放到剪枝之后了"
+				% int(pb["n_on"]))
 	for s in pos_bad:
 		bad.append("⑥b " + s)
-	print("[yematest] ⑥b 钩子位置（须在剪枝前）：候选集 %d → %d · 网络换进 %d 个/换出 %d 个%s" % [
-		c_off.size(), c_on.size(), only_on, only_off,
-		"" if pos_bad.is_empty() else " · " + str(pos_bad)])
+	print("[yematest] ⑥b 钩子位置：当前模式=%s" % ["剪枝后" if mode_after else "剪枝前"])
+	for pr in probes:
+		var d2: Dictionary = pr[1]
+		print("[yematest]       %s · 候选集 %d → %d · 网络换进 %d/换出 %d · 内部名次变动 %s" % [
+			pr[0], d2["n_off"], d2["n_on"], d2["only_on"], d2["only_off"],
+			"n/a（集合换了人、下标不对齐）" if int(d2["ord_moved"]) < 0 else str(d2["ord_moved"])])
+	if not pos_bad.is_empty():
+		print("[yematest]       ✗ %s" % str(pos_bad))
 
 	# ---- ⑥c 网络输出必须是**非常数**（输入层的元判据）----
 	# ★ 为什么单列：若权重全零 / 特征归一化常数被改坏 / 加载到别的 arch，`ext_prior` 会退化成
@@ -16541,14 +17732,12 @@ func _start_ai_turn():
 	if current_player != AI_COLOR or is_ai_thinking or game_over:
 		return
 	is_ai_thinking = true
-	_show_ai_hud(true)
-	_update_hud()  # 立即显示“白棋思考中”
+	_update_hud()  # 立即刷新回合文案（2026-11-08 起不再有「思考中」那一条）
 	# 稍微停顿一下再思考，让玩家看清刚才那手（0.12s：既能看清，又不至于在每手固定加一段可感延迟）
 	await get_tree().create_timer(0.12).timeout
 	if game_over or current_player != AI_COLOR:
-		# 等待期间被重置/终局：必须自己把思考态收回，否则 HUD 会一直停在「思考中」，
-		# 秒表协程也会永远 await 下去（重置路径靠 reset_game 清标记，终局路径没人清）
-		_show_ai_hud(false)
+		# 等待期间被重置/终局：必须自己把思考态收回，否则 `is_ai_thinking` 一直为 true
+		# ⇒ 输入闸把玩家点击全吞、`can_undo()` 恒假（重置靠 reset_game 清标记，终局路径没人清）
 		is_ai_thinking = false
 		_update_hud()
 		return
@@ -16556,29 +17745,23 @@ func _start_ai_turn():
 	# ★ 骨架对手模式（测试按钮）：不走 ai_engine，白方由第三套实现接管。
 	#   1 手贪心（TT 面积差最大化），无搜索、不认输 —— 骨架的诚实棋力。
 	if xg_play_mode:
-		_show_ai_hud(true, "骨架思考中…")
 		# ★ 2026-10-20：走**异步版**（后台线程）。原先同步调 => 每手约 90ms 不给主线程一帧
-		#   ⇒ HUD 文字改了却没重绘、画面定格 ≈5~6 帧，用户看到的就是"落子前卡一下"。
+		#   ⇒ 画面定格 ≈5~6 帧，用户看到的就是"落子前卡一下"。
 		#   `await` 让主线程边等边渲染；`gen != _ai_gen` 的作废检查在下面照旧生效。
 		var xmove: int = await _xg_choose_move_async(AI_COLOR)
 		if gen != _ai_gen or game_over or current_player != AI_COLOR:
-			_show_ai_hud(false)
 			is_ai_thinking = false
 			_update_hud()
 			return
 		_apply_ai_move(xmove)
-		_show_ai_hud(false)
 		is_ai_thinking = false
 		_update_hud()
 		return
 	# 极度劣势时先认输，不再浪费一次搜索（判据见 _ai_resign_eval）
 	if _ai_try_resign():
-		_show_ai_hud(false)
 		is_ai_thinking = false
 		_update_hud()
 		return
-	_show_ai_hud(true, "AI 思考中…")
-	_ai_hud_tick()   # 并发跑秒表（不 await：思考本身仍在下一条语句里）
 	var move_id: int = -1
 	# 搜索在后台线程进行，主线程每帧让出：思考期间画面/提示不会冻结
 	# ★ 2026-10-22：流水档走 `ai_liushui`（渗流引擎），其余走生产引擎。
@@ -16596,61 +17779,30 @@ func _start_ai_turn():
 		move_id = await ai_engine.choose_move_async(board, ko_point)
 	# 思考期间可能发生了重置/终局/换局：本轮结果作废
 	if gen != _ai_gen or game_over or current_player != AI_COLOR:
-		_show_ai_hud(false)
 		is_ai_thinking = false
 		_update_hud()
 		return
 
 	_apply_ai_move(move_id)
-	_show_ai_hud(false)
 	is_ai_thinking = false
 	_update_hud()
 
 
-# ====== AI 思考提示 HUD ======
-var _ai_hud_layer: CanvasLayer
-var _ai_hud_label: Label
-
-func _build_ai_hud() -> void:
-	_ai_hud_layer = GameConfig.new_themed_layer()
-	_ai_hud_layer.name = "AIHud"
-	_ai_hud_layer.layer = 20
-	_ai_hud_layer.visible = false
-	add_child(_ai_hud_layer)
-	_ai_hud_label = Label.new()
-	_ai_hud_label.text = "AI 思考中…"
-	_ai_hud_label.add_theme_font_size_override("font_size", 26)
-	_ai_hud_label.add_theme_color_override("font_color", Color(0.9, 0.95, 1))
-	_ai_hud_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	_ai_hud_label.add_theme_constant_override("outline_size", 6)
-	var vsize := get_viewport_rect().size
-	_ai_hud_label.position = Vector2(vsize.x - 220, 20)
-	_ai_hud_layer.add_child(_ai_hud_label)
-
-func _show_ai_hud(show: bool, text: String = "") -> void:
-	if _ai_hud_layer:
-		_ai_hud_layer.visible = show
-	if show and text != "" and _ai_hud_label:
-		_ai_hud_label.text = text
-
-## 思考期间在 HUD 上滚动显示已用时间。
-## 目的不是装饰：固定预算下玩家无法判断「还要等多久」会显得比实际更久，
-## 给出秒表后等待就有了上限感（本函数与搜索协程并发运行，靠 is_ai_thinking 收尾）
-func _ai_hud_tick() -> void:
-	var t0 := Time.get_ticks_msec()
-	while is_ai_thinking:
-		await get_tree().process_frame
-		if _ai_hud_label == null or not _ai_hud_layer.visible:
-			continue
-		var el := float(Time.get_ticks_msec() - t0) / 1000.0
-		_ai_hud_label.text = "AI 思考中…  %.1fs" % el
-
+# ⚰️ 2026-11-08 墓碑（名字不许回收）：这里原有「AI 思考提示 HUD」整块 ——
+#   `_ai_hud_layer` / `_ai_hud_label` / `_build_ai_hud()` / `_show_ai_hud()` / `_ai_hud_tick()`，
+#   即棋盘右上角那条会滚秒表的「AI 思考中… 1.2s」浮字。用户口令「去掉 AI 对战时的
+#   思考中提示」⇒ 整族删除（连同 `_hud_turn_label` 里那一支、身份槽的「思考中」副标题）。
+#   ★ `is_ai_thinking` **保留**：它是输入闸（`_check_playable()` 拒收点击）、悔棋作废
+#     （`_ai_gen`）、认输/停一手的前置条件，与「提示」是两件事。删的只是**显示**。
 # ====== 重置 ======
 func reset_game(quiet: bool = false) -> void:
 	# AI 思考是异步的：代次 +1 后，上一局遗留的思考协程返回时会发现代数变了，自行丢弃结果
 	_ai_gen += 1
 	# ★ 覆盖层一并失效：重开新局必须回到正常 HUD 轮换（否则"加载失败"提示会卡到下一局）。
 	_hud_override = ""
+	# ★ AI 台词同样每局复位（2026-11-02）：`Taunt._prev` 留着上一局快照会让新局第一手算出
+	#   跨局的虚假 delta（上一局 AI 死了 3 块 ⇒ 这局开局就喊「我这条龙没了」）。
+	_taunt_reset()
 	for vid in board.keys():
 		board[vid] = Stone.EMPTY
 	current_player = Stone.BLACK
@@ -16690,7 +17842,6 @@ func reset_game(quiet: bool = false) -> void:
 	if _clk != null:
 		_clk.reset()
 		clk = _clk.snapshot()
-	_show_ai_hud(false)
 	# 新棋局必须清空 AI 的搜索树与历史快照，否则会复用上一局的局面
 	if ai_engine:
 		ai_engine.reset_state()
@@ -16782,9 +17933,8 @@ var _drawer_right_panel: Panel = null
 var _drawer_left_body: VBoxContainer = null
 var _drawer_left_handle: Button = null
 var _drawer_right_handle: Button = null
-## 左抽屉内容：两条身份槽 + 8 个表情（3 列）。★ 尺寸与摆法全在 `_refit_net_identity()`
+## 左抽屉内容：两条身份槽 + 聊天区。★ 尺寸与摆法全在 `_refit_net_identity()`
 ## 与 `_build_drawers()`，两个函数各管一行（"谁摆位置 / 谁定尺寸"别混）。
-var _emote_grid: GridContainer = null
 var _net_id_self: Control = null            # 左抽屉内：自己（上）
 var _net_id_peer: Control = null            # 左抽屉内：对端（下）
 ## 头像圆的 CPU 遮罩缓存：steam_id -> Texture2D（圆形 alpha）。
@@ -16794,22 +17944,46 @@ var _avatar_circle_cache: Dictionary = {}
 ## 绘制里做"可能失败 + 要解码 + 要遍历像素"的活，会让一帧的耗时随头像是否就绪而变
 ## （掉帧且看不出原因），而且 `_draw` 会重绘很多次。
 var _avatar_tex: Array[Texture2D] = [null, null]
-## 自检用：各绘制入口被真实调用过的次数（key: identity / emote_cell / bubble）。
+## 自检用：各绘制入口被真实调用过的次数（key: identity）。
 ## ★ 判据"画出来了"不能靠"函数存在"，只能靠"这个计数涨了" —— 反例见 §121 哑刀三态。
 var _draw_ticks: Dictionary = {}
 var _avatar_retry_acc: float = 0.0          # 头像重试节奏累加器（0.5s 一问）
 
-## 抽屉开合的用户意图（点把手翻的就是这两个）。★ **不含**"视口太窄"那条派生 ——
+## 抽屉开合的用户意图。★ **不含**"视口太窄"那条派生 ——
 ## 那是 `_drawer_cramped()` 的事，两者一混就再也说不清"面板为什么是收起的"。
+## ★ 2026-11-07 起这两个布尔由**侧边悬停**自动写（`_update_drawer_hover()`）；
+##   收起走展开时可见的那颗把手；终局自动拉开时由 `_drawer_hover_lock` 钉住。
 var _drawer_left_open: bool = true
 var _drawer_right_open: bool = true
+## 侧边悬停自动抽出的三档旋钮（2026-11-07 用户口令「抽出的按钮隐藏，改成鼠标移动到
+## 侧边自动抽出」）。全部 @export ⇒ 运行期可调。
+@export var drawer_hover_enabled: bool = true
+@export var drawer_hover_edge_w: float = 36.0   # 侧边热区宽（px，最小不低于把手宽）
+@export var drawer_slide_sec: float = 0.22      # 拉出/推入单程时长（秒）
+## 抽屉滑出动画的**当前**进度（0 = 完全推出视口，1 = 到位）。
+## ★ 真源仍是上面两个 `_drawer_*_open`；t 只是"当前视觉位置"，由 `_tick_drawers()` 逐帧追它
+##   （摆位/判据一律读几何真源，不读 t ⇒ 动画半途不会把棋盘或判据带歪）。
+var _drawer_left_t: float = 1.0
+var _drawer_right_t: float = 1.0
+var _drawer_slide_applied: Vector2 = Vector2(-1.0, -1.0)  # 上次写入的 t，省掉静止帧的无谓写
+## 终局结算期间钉住抽屉：玩家正在看结算/点「重新开始」，hover 不许把两侧收走。
+var _drawer_hover_lock: bool = false
+## ★★ 2026-11-07 用户口令「抽屉默认拉开，收回时再用鼠标触发」：
+##   **取消"鼠标离开侧边就自动收回"**。hover 只负责「收起 → 抽出」；
+##   收回由**展开态那颗可见的收起把手**触发（`_on_drawer_handle_pressed()`），
+##   对话框因此能稳定停在屏幕上。
+## ★ 二次返工（用户「侧边栏收回的按钮在哪里？」）：原先那条**不可见**的 18px 侧边窄条
+##   点击已整族删除 —— 玩家找不到入口，且它会把贴边的任意一次点击误判成收起。
+## ★ 点收起后鼠标还停在热区里 ⇒ 用 latch 压住"下一帧又自动抽出"的抖动；
+##   鼠标离开热区一次后 latch 解除，再移回来才重新抽出。
+var _drawer_reopen_latch: Array[bool] = [false, false]
 ## 让位宽度**系数**：`1.0` = 按几何真源让位。
 ## ★ 存在的唯一理由是给判据配一把**阴性对照刀**：压到 0 ⇒ 面板照旧展开、棋盘不再让位 ⇒
 ##   `judge_drawer_layout()` 必须当场报红。没有它的话，"面板与棋盘不重叠"这条判据
 ##   只能在**已经摆对**的局面里跑，永远绿 —— 等于没有判据（§110 参照物不许与被测物同源）。
 ## ★ 出货恒为 1.0，且 `--drawertest` ⑦ 会断言它就是 1.0（防止有人把这把刀留在半开的位置）。
 var _drawer_band_ratio: float = 1.0
-## 抽屉面板**实际**的底色。所有画在抽屉上的东西（身份槽、表情格、回合提示、棋钟行）
+## 抽屉面板**实际**的底色。所有画在抽屉上的东西（身份槽、短语格、回合提示、棋钟行）
 ## 挑字色都只认 `_drawer_surface()` —— **不是** `page_surface()`。
 ## ★★ 2026-10-21 实测踩到的真 bug：抽屉底是**深色**（`overlay_surface()`，L≈0.1），
 ##   而身份槽与回合提示仍在按 `page_surface()`（宣纸主题下是暖米白）挑字色 ⇒
@@ -16820,19 +17994,172 @@ var _drawer_band_ratio: float = 1.0
 ##   它是"建抽屉时拍一张底色快照"，主题一变就与 StyleBox 脱钩（底与字一起停在旧主题）。
 ##   底色本来就是从页面底推出来的**纯函数** ⇒ 缓存已删，真源搬到 `_drawer_surface()`。
 
-## 两个槽各自的**剩余寿命**（秒）。>0 = 正在显示。★ 与 `_emote_bubble_idx` 一一对应：
-## 只写寿命不写 idx 就会"淡出时闪回上一个表情"（这类错位只在快速连发时看得见）。
-var _emote_bubble_left: Array[float] = [0.0, 0.0]
-var _emote_bubble_idx: Array[int] = [-1, -1]
-## 探针：上一帧**实际画出去**的表情 alpha，以及画那一刻的剩余寿命。
-## 判据读这两个（真画出去的数 + 当时的输入），不读 `emote_slot_alpha()` ——
-## 读派生函数等于判据自己问自己（§70）。
-## ★ 为什么还要记 `_last_emote_left`：判据要断的是**两者的函数关系**（alpha 由剩余寿命
-##   线性派生），而不是"某一时刻等于某个绝对值"。后者会被帧间自动 tick 扣掉的一两帧
-##   干扰到必须放宽容差（那就是掩盖）。前者与时序无关，而且同样能断住"二值开关"那种退化。
-var _last_emote_alpha: Array[float] = [0.0, 0.0]
-var _last_emote_left: Array[float] = [0.0, 0.0]
-var _emote_last_sent_ms: int = 0            # 上次发送时刻（节流用）
+## 两个槽各自的头像（0=自己 1=对端）。表情功能已于 2026-11-02 整套删除
+## （用户口令「聊天里的表情功能就放弃了」），头像圆里现在只画头像 / 首字占位。
+## ⚰️ 墓碑（名字不许回收）：这里原有 `_emote_bubble_left` / `_emote_bubble_idx`（表情寿命与索引）、
+##   `_last_emote_alpha` / `_last_emote_left`（自检探针）、`_emote_last_sent_ms`（发送节流）。
+##   五者随 `emotes.gd` 一起删除 —— 表情不再存在，就没有"谁在说什么、还剩多久"可言。
+
+# ====== AI 台词（2026-11-02，用户口令「离线生成、在线查表」）======
+# 位置：**显示走两条路**——HUD 轮换行（全文）+ 身份槽副标题（截断版，在它头像旁边）。
+#   ★ 为什么不是棋盘气泡：2026-10-22 那句用户口令「表情包不要遮挡棋盘」把整套气泡面板删了，
+#     台词再飘回棋盘上就是同一个错误重犯一次（见 `_draw_identity_slot()` 上方那块墓碑）。
+# ★★ 为什么不上本地小 LLM：0.5B Q4 约 397MB（导出包总共 390MB，直接翻倍），
+#   而更要命的是 **CPU 已饱和**（`tb200` vs `tb400` 32 局 16:16 z=0.00）——
+#   LLM 抢走的线程就是 MCTS 的思考预算 ⇒ AI 变慢，纯亏损。详见 `taunt.gd` 文件头。
+## 台词引擎实例。**懒加载**（`_taunt_ensure()` 是唯一创建点）：`_ready()` 里有一串自检会
+## 提前 return，那些自检不需要台词，白读一个 JSON。
+var _taunt: Taunt = null
+## 当前在显示的台词（空 = 没有说话）。与 `_taunt_left` **一一对应**：
+## 只清寿命不清文本 ⇒ 过期那一刻会闪回上一句（同 `_emote_bubble_idx` 那条教训）。
+var _taunt_text: String = ""
+var _taunt_left: float = 0.0
+## 池子载入失败的原因（非空 = 这局全程不说话）。★ 留着它是因为"完全不说话"和
+## "说话了但没显示"在玩家眼里一模一样，而日志里有这一行就能一眼分开。
+var _taunt_err: String = ""
+## 台词总闸（运行期可调）。false ⇒ 整局一句不说，且**不抽池子**（连 `pick()` 都不调，
+## 免得"关掉了但随机数序列还在走"这种查不出来的差异）。
+@export var taunt_enabled: bool = true
+
+# ---- 打字停顿（2026-11-03，用户口令「AI 对话回复的太快了，不像真人，
+#      加一个停顿进去，按回复的字数设置停顿时间，模拟真人打字的速度」）----
+## 等待中的回话世代号。每开口一次 +1，**后一句作废前一句**。
+## ★ 为什么必须有它：玩家连发两句时，第一句的等待还没结束就可能被第二句取代 ——
+##   没有世代号的话两句会先后冒出来，而且第二句看起来像在回答第一句。
+var _reply_seq: int = 0
+## 是否正处在"AI 打字中"（只影响身份槽副标题显示"正在输入…"，不参与任何判定）。
+var _ai_typing: bool = false
+## ★ **仪器旋钮，不是玩法开关**：整段停顿的倍率，生产恒为 1.0。
+##   自检把它拧到 0 才能连跑 20 次回话（否则一条 2 秒的等待 × 20 = 40 秒）。
+##   它**不改变"回不回"**，只改"多久回"（§150 仪器开关不许改动规则语义）。
+@export var taunt_typing_scale: float = 1.0
+
+# ====== 文字 / 语音聊天（2026-11-01，用户口令「继续优化对战，我希望加入文字和语言聊天」）======
+# 位置：左抽屉最下面（身份槽 → 常用短语格 → 聊天记录 → 输入行）。**不进 `_hud_buttons`**（同一类理由：
+#   那是布局判据的枚举基，混进只在联机态存在的控件会让本地/人机档量到一堆 size=0 的隐藏按钮）。
+#
+# ★★ 为什么现在敢放 `LineEdit` 了（16764 行那句"文字聊天不在本批"的正面对应）：
+#   当时不放的唯一理由是"`LineEdit` 抢焦点吃掉 R=重开 / ESC=暂停 这些对局快捷键"。
+#   ⇒ 解法不是不用 `LineEdit`，而是给 `_input()` 加一道**焦点闸**：输入框持有焦点时
+#     除 ESC（退出焦点）外的按键一律不管，交给 `LineEdit` 自己。
+#   这条闸的两面都有判据（`--chattest` ⑧⑨）：聚焦时按 R **不许**重开，失焦后按 R 必须照旧重开。
+#   只做前者的话，"闸门恒真"（任何键都被吞）也会全绿 —— 那就是把快捷键永久关掉了。
+const CHAT_MAX_LEN := 120          # 单条上限（字符）。★ 上限必须有：P2P 是可靠通道，长文本会挤压落子消息
+const CHAT_LOG_MAX := 60           # 聊天记录最多留几条（超出删最旧，否则 VBox 会无限长下去）
+## 发送防呆（2026-11-05，用户口令「禁止发送消息过于频繁」）。四条闸全在 send_chat()：
+## 最小间隔 / 短窗口条数 / 同内容重发 / 被挡时的可见反馈。运行期可调。
+@export var chat_send_gap_ms: int = 800
+@export var chat_burst_window_ms: int = 5000
+@export var chat_burst_max: int = 4
+@export var chat_repeat_guard_ms: int = 3000
+## 用户把聊天框往回拉后，静止多久自动拉回最新并恢复跟随（秒）。
+##
+## ★★ 2026-11-08 默认改回 **2.0**（用户口令「主动上滑后没有自动下滑回来」）。
+##   上一轮为了堵"每条新消息都白等三秒"，把这里设成 0 = **上滑后永远不回来**，
+##   于是新消息也再也拉不回底部 —— 那个口径直接被用户否掉了。
+## ⇒ 现在有**两条**回底触发器（`_append_chat()` 与 `_tick_chat()`），任一条满足就回底：
+##   ① 来了新消息 ⇒ **立刻**回底（不等倒计时）；
+##   ② 上滑后静置本变量秒、期间没有新消息 ⇒ 也回底。
+## ★ 0 仍保留为"只在有新消息时回底"的档（不再使用的旧口径，但留着它是有意义的：
+##   它把两个触发器拆得干净，判据 ㉑ 的第 ④⑤ 颗牙正是分别量这两条）。
+## ★★ 真正修掉"等三秒"的是**跟随态的判定方式**，不是这个秒数：跟随态由滚动条信号判
+##   （value 变小 = 用户往回拉），不按"离底"每帧反推 —— 内容长高造成的暂时离底不许
+##   再被误判成用户拉回。这条口径一个字都没动。
+## ★ 不读它的时候只有一个地方：`_on_chat_scroll_value_changed()` 用它当倒计时初值。
+@export var chat_stick_return_sec: float = 2.0
+const CHAT_STICK_SLACK := 12.0    # 判定「已贴底」的容差（px）
+## 聊天区字号（2026-11-03，用户口令「聊天字号调大点」）。
+## ★ 从硬编码三处改成**一个常量**：原来记录区写 12、输入框 13、发送/说话按钮 13 ——
+##   三处同属一块 UI 却各写各的，调大时必然漏掉一处（症状是"记录变大了但输入框还是小的"，
+##   而且这种不齐不会有任何报错）。§8 一处写一处读。
+## ★ 上限由抽屉宽度卡死：内容宽只有 172px（`DRAWER_W_LEFT` − 2×`drawer_pad`），
+##   15px 以上中文一行放不下 10 个字，记录会碎成一地短行；14 是"明显变大且不碎"的那档。
+const CHAT_FONT := 14
+const CHAT_SCROLL_MIN_H := 96.0    # 聊天记录区最小高度（余下高度由 VBox 的 expand 吃掉）
+## 快捷短语（2026-11-02，用户口令「常用短语也装在人类这边，便于沟通」）。
+## ★ 每条都要**短**（≤4 字）：抽屉内容只有 172px 宽，一行塞 2~3 个；
+##   长句会独占一行并把内容高度顶起来（真机内容区约 589，聊天区已经吃掉余量了）。
+## ★★ 只放**纯社交**短语。"我认输" / "重新开始" 这类**不放**：它们听起来像动作，
+##   而短语走的只是 `send_chat()`（改不了棋局）⇒ 玩家点了却发现棋还在下，是"说了不算"的
+##   坏体验。要认输请走 `_on_resign_pressed()` 那条真按钮。
+const CHAT_PHRASES: Array[String] = [
+	"好棋", "厉害", "受教了",
+	"承让", "哈哈", "再来一局",
+]
+var _chat_scroll: ScrollContainer = null
+var _chat_log: VBoxContainer = null
+var _chat_edit: LineEdit = null
+var _chat_send_btn: Button = null
+var _voice_btn: Button = null
+## 麦克风图标（`_voice_btn` 的子 Control，自绘）。★ 不挂在 Button 自己的 `draw` 上。
+var _voice_glyph: Control = null
+## 对端槽悬停时出现的两个开关（2026-11-04 从聊天区挪过来）+ 它们的图标。
+var _mute_btn: Button = null              # 静音对方语音
+var _block_btn: Button = null             # 屏蔽对方发言（文字）
+var _mute_glyph: Control = null
+var _block_glyph: Control = null
+## 对端槽的悬停层（常驻 visible，只有按钮随 hover 显隐 —— 见 `_build_peer_actions`）。
+var _peer_actions: Control = null
+var _peer_hover: bool = false
+## 屏蔽对方发言（单向，只影响本机）。★ 与「静音语音」是两个独立开关：
+## 有人只是打字很烦（刷屏），有人是语音吵 —— 一个按钮管不住两种骚扰。
+var _block_remote: bool = false
+## 被屏蔽挡掉的对方消息条数（取消屏蔽时告诉玩家错过了多少）。
+var _chat_rx_blocked: int = 0
+## 短语按钮的容器（`HFlowContainer`）。★ 留一个引用是为了让判据能数"到底建了几个按钮"
+## （只数常量数组会绿，而实际一个都没加进树里就是"看着有、点不到"）。
+var _phrase_flow: HFlowContainer = null
+## 聊天记录的**真源**（"显示了几条、都是什么"只认它；Label 是它的投影）。
+## ★ 不放 Label 数组：Label 会被 `_append_chat()` 反复重建，拿节点当数据源就是"数据与显示互为真源"。
+var _chat_lines: Array[String] = []
+## 抽屉收起时，对方消息以**气泡**浮在侧边空白（2026-11-07 用户口令）。
+## ★ 不飘在棋盘上：2026-10-22「表情包不要遮挡棋盘」那条口令仍然有效 ⇒
+##   气泡只占 `_drawer_band(0)` 已经让出来的那条空白，盘一个像素都不压。
+## ★ 气泡同时是"点我展开聊天"的入口（收起后再用鼠标触发的第二种方式）。
+@export var chat_bubble_sec: float = 3.5
+@export var chat_bubble_max_chars: int = 40
+var _chat_bubble: PanelContainer = null
+var _chat_bubble_label: Label = null
+var _chat_bubble_left: float = 0.0
+## 只给 `--chattest` ㉒ 用：允许自检里真的把气泡建出来量一次。出货恒 false。
+var _chat_bubble_probe: bool = false
+## `_input()` 的分流探针（自检读它判"这一键落到了哪条分支"，不读副作用猜）。
+## 取值："" 未处理 / "chat" 焦点闸吞掉 / "key" 落到对局快捷键。
+var _input_gate: String = ""
+var _chat_last_sent_ms: int = 0
+## 发送防呆的状态真源：成功发出的时间戳（滑动窗口）/ 上一条正文 / 冷却截止时刻。
+var _chat_send_times: Array[int] = []
+var _chat_last_text: String = ""
+var _chat_cooldown_until_ms: int = 0
+## 聊天区是否跟随最新（false = 玩家往回拉了，暂不抢滚动条）。
+## ★ 写点只有两处：`_on_chat_scroll_value_changed()`（用户滚动）与 `_tick_chat()` 的
+##   自动回归倒计时。**不许再按"离底"每帧反推** —— 内容长高同样会离底。
+var _chat_follow: bool = true
+var _chat_back_left: float = 0.0
+var _chat_keep_v: int = 0
+## 滚动条上一次的 value。**唯一用途**：分辨"用户往回拉"（变小）与"程序滚到底 / 内容长高"
+## （不变小）—— 比"离底"更本质，也不会被布局滞后一帧骗到。
+var _chat_last_v: float = 0.0
+## `_rebuild_chat_log()` 的同步重建窗口。★ 清空子节点那一刻内容高度瞬间归零 ⇒
+##   `max_value` 跟着塌、value 被钳小 ⇒ value_changed 也会"变小"，但那不是用户拉回。
+##   信号在这段窗口里只更新 `_chat_last_v`、不改跟随态。
+var _chat_rebuilding: bool = false
+## 禁言期间对端消息的暂存（解除禁言后回放到记录里，不丢对话）。
+var _chat_blocked_lines: Array[String] = []
+
+## 语音引擎（`VoiceChat`，2026-11-01）。**惰性创建**：单机/人机局永不建它
+## （建了就会有一个静音的 `AudioStreamPlayer` 每帧空转，且 `--headless` 下会打麦克风告警）。
+var _voice: VoiceChat = null
+## 用户是否按住了"说话"。★ 与 `_voice.is_tx()` 分开：这个是**意图**，那个是引擎状态，
+## 出了"采集起不来"的情形两者会不一致，而按钮外观必须跟**意图**走（否则松手了按钮还亮着）。
+## 自己麦克风是否在发（2026-11-03 从「按住说」改成开关）。
+## ★ **每局默认关**：开关形态比按住形态容易忘关，而"忘关"就是隐私事故
+##   （对面一直听着你家客厅）。所以开局一律不开麦，按钮按下态 == 这个变量 == 真实 `_tx`。
+var _voice_on: bool = false
+## 对方语音是否被本机静音（单向，只影响自己这一侧）。
+var _mute_remote: bool = false
+## 被本地静音丢掉的入站包数（只印不判：它是"静音真的在拦包"的现场证据）。
+var _voice_rx_muted: int = 0
 
 ## ⚰️ 2026-10-22 墓碑（名字不许回收）：这里原有三个变量 ——
 ##   `_emote_bubble_layer`（CanvasLayer 27）/ `_emote_self_bubble` / `_emote_peer_bubble`。
@@ -16842,25 +18169,26 @@ var _emote_last_sent_ms: int = 0            # 上次发送时刻（节流用）
 ##   寿命 / 索引两个数组保留（它们是"谁在说什么、还剩多久"的真源，与画在哪无关）。
 
 ## 身份槽几何（逻辑像素）。★ 头像直径与槽位高是**一对**：头像比槽位高就会画出边框。
-## ★★ 宽度必须 ≤ 左抽屉内容宽（`DRAWER_W_LEFT − 2×DRAWER_PAD` = 172）：
+## ★★ 宽度必须 ≤ 左抽屉内容宽（`DRAWER_W_LEFT − 2×drawer_pad` = 172）：
 ##   超出去的表现不是报错，而是内容把所在容器撑开 ⇒ 面板比 `_drawer_band()` 算的宽度更宽
 ##   ⇒ **右侧压到棋盘上**（正是这一轮要严防的那件事）。`--drawertest` ④ 就是量这条。
 const NET_ID_AVATAR_DIA := 44.0
 const NET_ID_SLOT_W := 172.0
 const NET_ID_SLOT_H := 56.0
-## 表情格：3 列 × 3 行（`Emotes.count()` = 8，最后一行 2 个）。
-## ★ 3 列而不是 4：抽屉在**基准横屏 1152×720** 下每侧只能借到 ~250px，
-##   4 列（4×52+3×8=232）会把面板撑到 252、进而把棋盘挤掉一档。3 列刚好塞进 172 内容宽。
-const EMOTE_PANEL_COLS := 3
-const EMOTE_CELL := 52.0
-const EMOTE_CELL_GAP := 8.0
-## 表情在头像上停留的时长 / 淡出段（秒）。
-## ⚰️ 2026-10-22：这里原有 `EMOTE_BUBBLE_DIA = 132.0`（棋盘气泡面板的直径）。
-##   气泡整套删掉、表情改画进头像圆之后它没有任何读者 ⇒ 删除（§33 死参数 = 旋钮拧不动）。
-const EMOTE_BUBBLE_LIFE := 2.6
-const EMOTE_BUBBLE_FADE := 0.45
-## 表情发送节流（毫秒）。★ 防连点刷屏：P2P 是 reliable 通道，连发会排队挤压落子消息。
-const EMOTE_SEND_GAP_MS := 600
+## 对端槽上「悬停才出现」的两个小按钮（静音他说话 / 屏蔽他发言）。
+## ★ 尺寸与间距同时被**绘制**（`_draw_identity_slot` 要按它缩 `text_w`）和
+##   **按钮几何**（`_build_peer_actions` 的 anchors）读 ⇒ 只能有一份（§8 一处写一处读）。
+##   分开写的话，改大图标后文字就会从按钮底下穿过去，而且不报错。
+const PEER_ACT_W := 24.0
+const PEER_ACT_GAP := 4.0
+const PEER_ACT_PAD := 4.0
+## ⚰️ 2026-11-02 墓碑（名字不许回收）：这里原有 `EMOTE_PANEL_COLS` / `EMOTE_CELL` /
+##   `EMOTE_CELL_GAP`（表情九宫格几何）、`EMOTE_BUBBLE_LIFE` / `EMOTE_BUBBLE_FADE`
+##   （头像上的停留与淡出）、`EMOTE_SEND_GAP_MS`（发送节流）。
+##   用户口令「聊天里的表情功能就放弃了」⇒ 整套表情（`emotes.gd` + 九宫格 + 头像圆绘制 +
+##   联机 `m="emote"` 协议）删除，六个常量随之无读者（§33 死参数 = 旋钮拧不动）。
+##   ★ 删掉表情后左抽屉空出的纵向空间由聊天区吃掉（它的 `size_flags_vertical = EXPAND_FILL`）——
+##     不需要改任何尺寸常量，这正是当初把聊天区设成"吃剩余高度"的收益。
 
 # ====== 复盘 HUD（棋谱阶段② 交互层，2026-10-08）======
 # ★★ 为什么是**独立一层**而不是往 `_hud_buttons` 里塞几个按钮：
@@ -17232,9 +18560,9 @@ func judge_drawer_layout() -> Array:
 ##     ⚠️ 2026-10-21 之前这里取 `page_surface()`：那时 HUD 没有底板、直接浮在页面底上，
 ##     口径是对的；搬进抽屉后不跟着改，判据就会拿"深棕字 vs 米白页面底"算出一个漂亮的
 ##     6.40 分 —— 而字实际画在深棕面板上，对比度 ~1.0。**参照物与被测物的落点必须是同一个地方。**
-##   ⚠️ 只覆盖 `_hud_turn_label`，**不含** `_ai_hud_label`（「AI 思考中…」）：那一个刻意用
-##     "近白 + 6px 黑描边"做**背景无关**的可读性（它浮在棋盘上，底色不是面板底而是盘面），
-##     改用主题墨色反而会在某些主题下与盘面撞色。它是**有意的例外**，不是漏接线。
+##   ⚰️ 2026-11-08：这条判据原来还特意声明「不含 `_ai_hud_label`（AI 思考中…）」——
+##     那条浮字已按用户口令整族删除（见「AI 思考提示 HUD」那处墓碑）⇒ 例外项不复存在，
+##     本判据只看 `_hud_turn_label` 一个对象。
 func judge_hud_text_theme() -> Array:
 	if _hud_turn_label == null or not is_instance_valid(_hud_turn_label):
 		return [false, "HUD 回合提示未建"]
@@ -17259,7 +18587,8 @@ func _update_hud() -> void:
 	# 邀请好友按钮同理（2026-10-21）：可见性必须**在所有 return 之前**派生 ——
 	# 下面 ONLINE 分支有多个 return，塞进分支里就会漏掉某些态（典型"看起来没接线"）。
 	_refresh_invite_btn()
-	# 身份条 + 表情按钮同理（2026-10-21）：**联机专属**，可见性同样必须在所有 return 之前派。
+	# 身份条 + 表情 + 聊天同理（2026-10-21；2026-11-02 起**不再联机专属**，单机也有左抽屉）：
+	# 可见性同样必须在所有 return 之前派。
 	_refresh_net_extras()
 	# ★ 悔棋按钮先刷（**在所有分支之前**）：下面 ONLINE 分支会 `return`，
 	#   放到分支后面的话联机模式下这个按钮就永远不刷新（典型"看起来没接线"）。
@@ -17284,16 +18613,24 @@ func _update_hud() -> void:
 	if _hud_override != "":
 		_hud_turn_label.text = _hud_override
 		return
+	# ★ AI 台词（2026-11-02）：排在失败提示**之后**、回合文案**之前**。
+	#   为什么不复用 `_hud_override`：那个覆盖层是"邀请失败 / 棋谱加载失败"在用，
+	#   而且是"谁最后写谁生效 + 到期前核对是不是自己那条"的口径 —— 台词 4 秒一换，
+	#   挤进去会把正在显示的真·失败提示抹掉（那正是 `_show_invite_note()` 注释里警告的事）。
+	#   ⇒ 独立变量 + 独立优先级：台词只压回合文案，压不到任何错误提示。
+	if _taunt_left > 0.0 and _taunt_text != "":
+		_hud_turn_label.text = _taunt_text
+		return
 	if game_mode == ONLINE:
 		if not _net_connected:
 			if _is_host and GameConfig.invite_code != "":
-				_hud_turn_label.text = "连接中… 邀请码：%s（发给好友）" % GameConfig.invite_code
+				_hud_turn_label.text = "连接中… 邀请码：%s" % GameConfig.invite_code
 			else:
 				_hud_turn_label.text = "连接中…"
 		elif game_over:
 			_hud_turn_label.text = "对局结束"
 		elif _net_phase == "ready":
-			_hud_turn_label.text = "等待双方点击「准备」…"
+			_hud_turn_label.text = "等待双方准备…"
 		else:
 			var me := "黑" if _net_color == Stone.BLACK else "白"
 			var turn := "你" if current_player == _net_color else "对方"
@@ -17311,10 +18648,12 @@ func _update_hud() -> void:
 		_hud_layer.visible = true
 	if game_over:
 		_hud_turn_label.text = "对局结束"
-	elif is_ai_thinking:
-		_hud_turn_label.text = "白棋（AI）思考中…"
 	elif game_mode == VS_AI:
-		_hud_turn_label.text = "轮到你 —— 执黑"
+		# ★★ 2026-11-08：删掉「AI 思考中…」这一支（用户口令「去掉 AI 对战时的思考中提示」）。
+		#   现在统一按**行棋方**报回合：白方在算棋就写「轮到 AI」—— 陈述事实，不是提示它在想。
+		#   ⚠️ 不许把分支删掉了事让它落到「轮到你」：白方算棋时写「轮到你」是假话
+		#     （§127 判据要正负成对：只断「玩家回合写轮到你」会绿，AI 回合写错没人管）。
+		_hud_turn_label.text = "轮到你" if current_player != AI_COLOR else "轮到 AI"
 	else:
 		_hud_turn_label.text = "轮到" + ("黑方" if current_player == Stone.BLACK else "白方")
 
@@ -17372,18 +18711,19 @@ func _build_drawers() -> void:
 	# 而 `_drawer_layer != null` 会让下一次调用以为已经建完了）。
 	if _hud_layer == null or not is_instance_valid(_hud_layer):
 		return
-	# ---- 左抽屉（联机身份 + 表情）：独立一层 ----
-	# ★ 它单独一层是**必须**的：可见性由"联机态"（`_refresh_net_extras()`）决定，
+	# ---- 左抽屉（身份 + 表情 + 聊天）：独立一层 ----
+	# ★ 它单独一层是**必须**的：可见性由"不在复盘态"（`_refresh_net_extras()`）决定，
 	#   而 `_hud_layer.visible` 已经有三处写点（联机未连 / 复盘 / 面板互斥）——
 	#   混进同一层就会出现"复盘时左抽屉跟着消失"或"返回菜单后它还留着"这类静默错。
 	_drawer_layer = GameConfig.new_themed_layer()
 	_drawer_layer.name = "DrawerLeftLayer"
 	_drawer_layer.layer = 24
-	_drawer_layer.visible = false     # 默认藏：只有 `_refresh_net_extras()` 在联机态打开
+	# 默认藏：交给 `_refresh_net_extras()` 按"是否在复盘"打开（2026-11-02 起所有模式都打开）。
+	_drawer_layer.visible = false
 	add_child(_drawer_layer)
 	_drawer_left_panel = Panel.new()
 	_drawer_left_panel.name = "DrawerLeft"
-	_drawer_left_panel.add_theme_stylebox_override("panel", _drawer_stylebox())
+	_drawer_left_panel.add_theme_stylebox_override("panel", _drawer_stylebox(0))
 	# ⚰️ 2026-10-22 墓碑：这里原有三行"先把抽屉底色缓存定下来再建内容"。
 	#   `_drawer_surface()` 改成纯函数之后顺序问题**从结构上消失**（谁先问都能算对），
 	#   那三行连同 `_drawer_surface_cache` 一起删除。
@@ -17398,15 +18738,12 @@ func _build_drawers() -> void:
 	_drawer_left_panel.add_child(_drawer_left_body)
 	_net_id_self = _make_identity_slot(0)
 	_net_id_peer = _make_identity_slot(1)
-	_emote_grid = GridContainer.new()
-	_emote_grid.name = "EmoteGrid"
-	_emote_grid.columns = EMOTE_PANEL_COLS
-	_emote_grid.add_theme_constant_override("h_separation", EMOTE_CELL_GAP)
-	_emote_grid.add_theme_constant_override("v_separation", EMOTE_CELL_GAP)
-	_emote_grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_drawer_left_body.add_child(_emote_grid)
-	for i in range(Emotes.count()):
-		_emote_grid.add_child(_make_emote_cell(i))
+	# ⚰️ 2026-11-02 墓碑（名字不许回收）：这里原有表情九宫格
+	#   （`GridContainer` + `EMOTE_PANEL_COLS` 列 + 每格 `_make_emote_cell(i)`）。
+	#   用户口令「聊天里的表情功能就放弃了」⇒ 整套删除。
+	#   ★ 空出来的纵向空间**不需要补偿**：聊天区一直是 `SIZE_EXPAND_FILL`，
+	#     它会自动吃掉多出来的高度（当初这么设的收益在这里兑现）。
+	_build_chat_ui()
 	_drawer_left_handle = _make_drawer_handle(0)
 	_drawer_layer.add_child(_drawer_left_handle)
 	# ---- 右抽屉（对局按键）：挂在 `_hud_layer` 上 ----
@@ -17417,7 +18754,7 @@ func _build_drawers() -> void:
 	#   （`_hud_box` 没有底板，被面板盖住就等于整簇按钮消失）。
 	_drawer_right_panel = Panel.new()
 	_drawer_right_panel.name = "DrawerRight"
-	_drawer_right_panel.add_theme_stylebox_override("panel", _drawer_stylebox())
+	_drawer_right_panel.add_theme_stylebox_override("panel", _drawer_stylebox(1))
 	_drawer_right_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_hud_layer.add_child(_drawer_right_panel)
 	_hud_layer.move_child(_drawer_right_panel, 0)
@@ -17434,7 +18771,12 @@ func _build_drawers() -> void:
 ##   （描边色用**抽屉面上的**墨色 13%，不是页面面上的 —— 参照面要跟被测面走，§130）。
 ## ★ 不用 `shadow_*`：§128 那次退出崩溃的教训针对的是自绘抗锯齿图元，阴影是引擎画的、
 ##   理论上无关，但这一档没必要冒风险 —— 描边已经够用。
-func _drawer_stylebox() -> StyleBox:
+## `side`：0/1 = 左/右抽屉面板（**外侧两个角倒角归零**），-1 = 其它（四角全圆，如聊天气泡）。
+## ★★ 2026-11-08：面板改成贴屏幕侧边（见 `_drawer_rect()`），贴边还留 10px 圆角会在屏幕
+##   边缘露出一个页面底的缺口（看着像面板破了个角）⇒ 外角归零、只留内角。
+## ★ 用参数而不是"建完再改"：`_drawer_stylebox()` 每次 `new()` 一个新实例，两个面板与
+##   气泡各拿各的，所以这里改一个字节都不会串到别人身上。
+func _drawer_stylebox(side: int = -1) -> StyleBox:
 	var surf: Color = _drawer_surface()
 	var ink: Color = GameConfig.readable_ink_on(surf)
 	var sb := StyleBoxFlat.new()
@@ -17442,8 +18784,14 @@ func _drawer_stylebox() -> StyleBox:
 	sb.border_color = Color(ink.r, ink.g, ink.b, 0.13)
 	sb.set_border_width_all(1)
 	sb.set_corner_radius_all(10)
+	if side == 0:
+		sb.corner_radius_top_left = 0
+		sb.corner_radius_bottom_left = 0
+	elif side == 1:
+		sb.corner_radius_top_right = 0
+		sb.corner_radius_bottom_right = 0
 	# 内容边距全 0：子节点位置/尺寸由 `_refit_drawers()` + `drawer_content_rect()` 手动写，
-	# 面板不吃内容边距 —— 留一份在这里就和 `DRAWER_PAD` 变成两个真源（§111）。
+	# 面板不吃内容边距 —— 留一份在这里就和 `drawer_pad` 变成两个真源（§111）。
 	sb.content_margin_left = 0.0
 	sb.content_margin_right = 0.0
 	sb.content_margin_top = 0.0
@@ -17473,10 +18821,19 @@ func _drawer_surface() -> Color:
 	return page.lerp(GameConfig.readable_ink_on(page), DRAWER_SURFACE_MIX)
 
 
-## 折叠把手：贴在抽屉内侧（展开）或屏幕边（折叠）的一条窄键。
+## 「关闭抽屉」按钮 = 抽屉最外侧那条**通高窄键**，点了就收起。
+## ★★ 2026-11-08 重做外观（用户口令「这个关闭抽屉按钮还是不太好看，改成抽屉与屏幕侧边
+##   相接，最侧边的一条就是关闭抽屉的按钮」）：它现在是抽屉的"唇"——
+##     · 位置：屏幕最外沿一条通高窄带（`_drawer_handle_rect()`），不再贴在面板内侧居中；
+##     · 底色：`抽屉面 → 强调色` 混 10%（hover 更明显）⇒ 看着是面板同族的一条边，不是浮键；
+##     · 描边：只在**内侧那条竖边**画 1px 强调色（外沿贴屏幕，画了也看不见）；
+##     · 倒角：外沿归零、内侧 5px —— 与面板外角归零连成一体。
+## ★ 与旧「抽出把手」的区别：收起态**根本不画**（抽出改由侧边悬停）⇒ 没有"两种朝向"
+##   的状态切换，文字恒为收起方向。可见性由 `_apply_drawer_slide()` 唯一写入。
 ## ★ 样式**自己拼**、不用 `style_theme_button()`：那条路径会带上 16/9 的内边距，
 ##   而把手只有 18px 宽 —— 内边距一加，最小宽度就超过 `DRAWER_HANDLE_W`，
 ##   `_drawer_band()` 算的让位宽度就不够了（症状：把手压在棋盘边缘格子上）。
+## ★ 仍挂「收起」tooltip（用户曾报「收回的按钮在哪里」）：形态变了，可发现性不能退化。
 ## ★ 文字用 ASCII 的 `<` / `>`，不用 `◀` / `▶`：本工程的 UI 字体是中文正文字体，
 ##   几何形状字符（U+25C0/U+25B6）不一定有，缺字时画出来是豆腐块且**不报错**。
 ##   （同族先例：复盘 HUD 的窄屏短符号用的是 `|<` `<<` `>` `>>` `>|`。）
@@ -17484,18 +18841,39 @@ func _make_drawer_handle(side: int) -> Button:
 	var b := Button.new()
 	b.name = "DrawerHandle%d" % side
 	b.text = "<" if side == 0 else ">"
+	b.tooltip_text = "收起"
 	b.focus_mode = Control.FOCUS_NONE
 	b.clip_text = true
-	b.add_theme_font_size_override("font_size", 15)
-	var page := GameConfig.page_surface()
-	var ink := GameConfig.readable_ink_on(page)
+	b.add_theme_font_size_override("font_size", 18)
+	# ★ 参照面取 `_drawer_surface()`（它紧贴抽屉面板）而**不是** `page_surface()`：
+	#   这颗按键现在长在抽屉的边上，它的底色是从抽屉面推出来的（§130 参照面跟被测面走）。
+	var surf: Color = _drawer_surface()
+	var ink := GameConfig.readable_ink_on(surf)
 	var accent := GameConfig.accent_color()
 	for st in ["normal", "hover", "pressed", "disabled", "focus"]:
 		var sb := StyleBoxFlat.new()
-		sb.bg_color = Color(ink.r, ink.g, ink.b, 0.16 if st == "normal" else 0.26)
+		# 底色 = 抽屉面朝强调色混一点点（按下态最深）⇒ 与面板同族、hover 有反馈。
+		var lift: float = 0.16
+		if st == "hover":
+			lift = 0.28
+		elif st == "pressed":
+			lift = 0.36
+		sb.bg_color = surf.lerp(accent, lift)
 		sb.border_color = Color(accent.r, accent.g, accent.b, 0.55)
-		sb.set_border_width_all(1)
-		sb.set_corner_radius_all(4)
+		# 只在**内侧那条竖边**画描边：外沿贴着屏幕边，画了也看不见（白占 1px）。
+		sb.set_border_width_all(0)
+		if side == 0:
+			sb.border_width_right = 1
+		else:
+			sb.border_width_left = 1
+		# 倒角：外沿归零、内侧 5px，与面板外角归零连成一体。
+		sb.set_corner_radius_all(0)
+		if side == 0:
+			sb.corner_radius_top_right = 5
+			sb.corner_radius_bottom_right = 5
+		else:
+			sb.corner_radius_top_left = 5
+			sb.corner_radius_bottom_left = 5
 		# 四边内容边距全 0：宽度由 `custom_minimum_size` 说了算（见上面那段注释）。
 		sb.content_margin_left = 0.0
 		sb.content_margin_right = 0.0
@@ -17503,7 +18881,7 @@ func _make_drawer_handle(side: int) -> Button:
 		sb.content_margin_bottom = 0.0
 		b.add_theme_stylebox_override(st, sb)
 	b.add_theme_color_override("font_color", ink)
-	b.add_theme_color_override("font_hover_color", accent)
+	b.add_theme_color_override("font_hover_color", accent)   # 常态墨色、hover 强调色（对比度优先）
 	b.add_theme_color_override("font_pressed_color", accent)
 	b.add_theme_color_override("font_focus_color", ink)
 	b.custom_minimum_size = Vector2(DRAWER_HANDLE_W, DRAWER_HANDLE_H)
@@ -17511,35 +18889,807 @@ func _make_drawer_handle(side: int) -> Button:
 	return b
 
 
-## 一个表情格：按钮（外观 + 点击）+ **子 Control**（自绘）。
-## ★ 自绘挂在子 Control 上、**绝不**挂 Button 自己的 `draw`：见下面那段 2026-10-21 的实测。
-func _make_emote_cell(idx: int) -> Button:
+## ⚰️ 2026-11-02 墓碑（名字不许回收）：这里原有 `_make_emote_cell()`（表情格：Button + 自绘子
+##   Control，后者是为了绕开"Button 自己发绘制命令 ⇒ 退出时 0xC0000005"那条实测）。
+##   用户口令「聊天里的表情功能就放弃了」⇒ 整套表情删除，九宫格连同这个工厂一起消失。
+
+
+# ====== 文字 / 语音聊天：UI + 协议（2026-11-01）======
+## 建聊天 UI（左抽屉最下面）：记录区（滚动）+ 输入行。
+##
+## ★ 全部用**原生控件**（`ScrollContainer` / `Label` / `LineEdit` / `Button`），不在这一块自绘：
+##   换行排版、光标、IME 组字、滚动条都是引擎的活，自绘一遍既做不到，又要多背一套画法风险
+##   （§128：自绘图元一律 `antialias=false`，那类崩溃只在真机暴露）。
+##   代价是这些控件会进 `--menutest` ⑯ 的明度扫描 —— 那恰恰是**收益**：字看不清会被判据逮到。
+##   但因此**必须**连盒底一起主题化（`style_theme_line_edit` 的注释：字色与盒色是一对，
+##   只改一半就是把可见性问题从"盒不跟主题"换成"字看不清"）。
+##
+## ★ 为什么聊天区是 `size_flags_vertical = EXPAND_FILL`：抽屉高度 = 视口 − 2×边距，
+##   随窗口变；身份槽与表情格是定高的"硬项"，聊天必须吃掉**剩余**那一截，否则窗口一高
+##   底部就空出一块（看着像没画完），窗口一矮又溢出面板。
+func _build_chat_ui() -> void:
+	if _chat_scroll != null and is_instance_valid(_chat_scroll):
+		return
+	if _drawer_left_body == null:
+		return
+	_chat_scroll = ScrollContainer.new()
+	_chat_scroll.name = "ChatScroll"
+	_chat_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_chat_scroll.custom_minimum_size = Vector2(0.0, CHAT_SCROLL_MIN_H)
+	# 只竖滚：横滚会把每行文本挤出面板（而面板宽度是算出来的，溢出一律压到棋盘上）。
+	_chat_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_chat_scroll.mouse_filter = Control.MOUSE_FILTER_PASS
+	_drawer_left_body.add_child(_chat_scroll)
+	_chat_log = VBoxContainer.new()
+	_chat_log.name = "ChatLog"
+	_chat_log.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_chat_log.add_theme_constant_override("separation", 3)
+	_chat_log.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_chat_scroll.add_child(_chat_log)
+	# ★★ 2026-11-07：「用户主动拉回」的**唯一识别点** = 滚动条 value 变小。
+	#   原来靠 `_tick_chat()` 每帧"离底 ⇒ 判定用户拉回"反推，但**新消息把内容撑高**同样会
+	#   离底（`ScrollContainer` 的 `max_value` 下一帧才反映新行）⇒ 每条新消息都被误判成
+	#   "玩家往回拉了"，于是启动 3 秒倒计时 ⇒ 用户看到的就是"新消息要等三秒才滚下来"。
+	#   信号只在 value 真的变了才发；程序把滚动条往底推是**变大**，不会被当成拉回。
+	var chat_bar := _chat_scroll.get_v_scroll_bar()
+	if chat_bar != null:
+		chat_bar.value_changed.connect(_on_chat_scroll_value_changed)
+		_chat_last_v = chat_bar.value
+	# ---- 常用短语（2026-11-02）----
+	# 位置：聊天记录**下方**、输入框**上方**。理由：短语是"不想打字时的替代品"，
+	#   视线路径该是"看记录 → 挑一句 → 点"；放到输入框下方就变成"先看见输入框才想起有短语"。
+	# ★ 用 `HFlowContainer` 而不是又一个 `GridContainer`：抽屉宽度是硬约束（172），
+	#   而短语字数不等 —— 定列网格会让短句两边留白、长句挤成一团；
+	#   流式排布按可用宽度自己折行，以后改短语表不用重算列数。
+	_phrase_flow = HFlowContainer.new()
+	_phrase_flow.name = "ChatPhrases"
+	_phrase_flow.add_theme_constant_override("h_separation", 4)
+	_phrase_flow.add_theme_constant_override("v_separation", 4)
+	_phrase_flow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_drawer_left_body.add_child(_phrase_flow)
+	for ph in CHAT_PHRASES:
+		var pb := _make_chat_button(ph, "直接发出「%s」" % ph, 0.0)
+		# ★ 比发送/说话按钮矮（26 vs 30）：短语是"一行里的许多小格"，6 个 30px 的按钮
+		#   会多占一整行，而真机 720 高时内容区只剩约 589 —— 聊天区已经吃掉余量了。
+		pb.custom_minimum_size = Vector2(0.0, 26.0)
+		pb.pressed.connect(_on_phrase_pressed.bind(ph))
+		_phrase_flow.add_child(pb)
+	# 输入框**独占一行**（整 172px 宽）。
+	# ★ 第一版把它和两个按钮挤在同一行，实测（`--shotchat` 截图）输入区只剩 ~90px，
+	#   打三四个字就看不见前面的内容了。抽屉宽度是硬约束（`DRAWER_W_LEFT` − 2×`drawer_pad`
+	#   = 172），所以只能往**纵向**要空间：内容最小高从 450 涨到 ~486，在真机内容区
+	#   （720 高时约 589）里仍有余量。
+	_chat_edit = LineEdit.new()
+	_chat_edit.name = "ChatEdit"
+	_chat_edit.placeholder_text = "回车发送…"
+	_chat_edit.max_length = CHAT_MAX_LEN
+	_chat_edit.custom_minimum_size = Vector2(0.0, 30.0)
+	_chat_edit.add_theme_font_size_override("font_size", CHAT_FONT)
+	GameConfig.style_theme_line_edit(_chat_edit, _drawer_surface())
+	_chat_edit.text_submitted.connect(_on_chat_submitted)
+	_drawer_left_body.add_child(_chat_edit)
+	var row := HBoxContainer.new()
+	row.name = "ChatRow"
+	row.alignment = BoxContainer.ALIGNMENT_END
+	row.add_theme_constant_override("separation", 8)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_drawer_left_body.add_child(row)
+	# ★ `发送` 用 `EXPAND_FILL`：麦克风按钮改成 30px 图标后，剩下的宽度全给它。
+	_chat_send_btn = _make_chat_button("发送", "发送（回车同效）", 0.0)
+	_chat_send_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_chat_send_btn.pressed.connect(_on_chat_send_pressed)
+	row.add_child(_chat_send_btn)
+	# ★★ 麦克风改成**开关**（用户 2026-11-03 口令：「自己的麦克风改成开启/关闭」）。
+	#   原来「按住说」= 按住才发、松手即停：隐私上最保守，但连说三句要按三次，
+	#   实战里玩家会改用"拿东西压住按钮"，那比明着开麦更糟（看着像开着、其实压歪了）。
+	#   开关形态的隐私风险靠**默认关**兜住（见 `_voice_on` 声明处），不靠按住。
+	_voice_btn = _make_chat_button("", "麦克风：关（点一下开麦）", 30.0)
+	_voice_btn.toggle_mode = true
+	# ★★ 按钮上**只画图标不写字**（用户 2026-11-04 口令：「开关按钮不要用文字显示，
+	#   可以用麦克风图标」）。文字版「麦克风：关」要占 108px，把「发送」挤到 56 ——
+	#   30px 的图标把这些宽度全还给输入那一侧。状态靠图标本身表达（加斜杠 = 关），
+	#   完整文案进 tooltip。
+	# ★ 图标画在**子 Control** 上，不挂 Button 自己的 `draw` 信号：本工程实测挂 Button 的
+	#   `draw` 有约 1/3 概率在退出时 `0xC0000005`（墓碑见 `_draw_identity_slot` 上方）。
+	# ★ 只连 `toggled`：它由真实点击与 `button_pressed = x` 赋值触发；
+	#   自检里必须用**赋值**驱动它，手写 `toggled.emit()` 不改 `button_pressed`
+	#   ⇒ 走的是"信号发了但按钮没动"的假现场（本工程 2026-11-01 在 `--mictest` ⑤ 栽过一次）。
+	_voice_btn.toggled.connect(_on_voice_toggled)
+	row.add_child(_voice_btn)
+	_voice_glyph = _GlyphIcon.new()
+	_voice_glyph.kind = "mic"
+	_voice_glyph.on = false
+	_voice_glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_voice_btn.add_child(_voice_glyph)
+	_voice_glyph.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# ⚰️ 2026-11-04：这里原有「对方声音：开 / 静音」独占一行（2026-11-03 加的）。
+	#   用户口令「把这个静音挪到对手信息那一栏，鼠标移动到对手那里自动出现静音按钮」
+	#   ⇒ 挪进对端身份槽（`_build_peer_actions`），聊天区因此少一整行（约 38px）。
+	_refresh_chat_ui()
+
+
+## 聊天区的小按钮。★ `focus_mode = NONE`：不许抢输入框焦点 ——
+## 否则"打完字点发送，焦点跳到按钮上"，接着打字就全打到空处（而且看着像输入框坏了）。
+func _make_chat_button(label: String, tip: String, w: float) -> Button:
 	var b := Button.new()
-	b.name = "EmoteCell%d" % idx
-	b.text = ""            # 表情全靠子节点自绘，按钮只提供外观与点击
+	b.text = label
+	b.tooltip_text = tip
 	b.focus_mode = Control.FOCUS_NONE
-	b.custom_minimum_size = Vector2(EMOTE_CELL, EMOTE_CELL)
-	b.tooltip_text = Emotes.name_of(idx)
-	# 抽屉底 = `overlay_surface()`（`style_dialog_panel()` 用的就是它）⇒ 按钮配色必须按
-	# **同一块面**反推，否则浅色主题下会出现"按页面底色挑的字色画在面板底色上"（§110）。
-	GameConfig.style_theme_button(b, _emote_panel_surface())
-	b.pressed.connect(_on_emote_pick.bind(idx))
-	# ★★ 自绘挂在**子 Control** 上，**绝不**挂在 Button 自己的 `draw` 信号上。
-	#   2026-10-21 实测（`_emote_stability.py`，6 轮对照）：
-	#     · 挂在 Button 自己身上 ⇒ 退出时 **2/6 概率 0xC0000005 访问违规**
-	#       （截图已落盘、stdout 完整，崩在 `quit()` 之后的清理阶段）；
-	#     · 挂到子 Control（本写法）/ 干脆不画 ⇒ **6/6 全部干净退出**。
-	#   区别在于 Button 自己也要发绘制命令（StyleBox + 文字），引擎会把两者的
-	#   渲染命令混在同一条 canvas item 序列里清 —— 而普通 Control 只有我们这一份。
-	#   ⚠️ 这类崩溃**只在退出时发作**，任何"看日志有没有 ERROR"的判据都抓不到，
-	#      只有"连跑 N 次统计退出码"能看见（§17 重复优于单次印象）。
-	var paint := Control.new()
-	paint.name = "CellPaint"
-	paint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	paint.set_anchors_preset(Control.PRESET_FULL_RECT)
-	paint.draw.connect(_draw_emote_cell.bind(paint, idx))
-	b.add_child(paint)
+	b.custom_minimum_size = Vector2(w, 30.0)
+	b.add_theme_font_size_override("font_size", CHAT_FONT)
+	# ★ 内边距必须收窄：`style_theme_button()` 的默认 `BTN_PAD_PAGE` 是给满宽按钮的，
+	#   套在 30px 高的格子上会把文字挤没（最小宽度被内边距顶到 44+，两个按钮就超行宽）。
+	GameConfig.style_theme_button(b, _drawer_surface(), Vector2(6.0, 2.0))
 	return b
+
+
+## 这一局能不能打字。
+## ★★ 2026-11-02：人机档**放开**（用户口令「现在接上」）—— AI 现在会回话，
+##   "只能听不能说"就不成立了。联机档仍要求"真有通道且已连接"。
+## ★ 两档的 `false` 含义不同（联机 = 还没连上，会自己变 true；人机 = 永远 true），
+##   所以**不合并成一个布尔**：将来加第三档（只读观战 / 回放）时这里还放得下。
+func can_chat() -> bool:
+	if game_mode == VS_AI:
+		return true
+	return game_mode == ONLINE and _chan != null and _net_connected
+
+
+## 这一局能不能发语音：通道必须声明支持（基类默认 false，见 `NetChannel.supports_voice`）。
+## ★ `_chan != null` 这一条是**放开人机档聊天时一起加的**：人机档 `can_chat()` 为真但没有
+##   通道，裸调 `_chan.supports_voice()` 是空指针崩溃（§109 插参数后逐调用点核对 —— 
+##   `can_chat()` 改了语义，所有用它当"有没有通道"前提的地方都要重看一遍）。
+func can_voice() -> bool:
+	return can_chat() and _chan != null and _chan.supports_voice()
+
+
+## 聊天 UI 的可用性派生点（唯一）。`_refresh_net_extras()` 每次都会调它。
+func _refresh_chat_ui() -> void:
+	if _chat_edit == null or not is_instance_valid(_chat_edit):
+		return
+	var chat_ok := can_chat()
+	var voice_ok := can_voice()
+	var cooling := _chat_send_cooling()
+	_chat_edit.editable = chat_ok
+	# ★ 单机文案（2026-11-02 两轮）：左抽屉单机也显示 ⇒ 这句是"你这一侧说不了话"。
+	#   ★★ 人机档现在 `can_chat()` 为真，所以下面的 `chat_ok` 分支就是它平时走的那条；
+	#      剩下的 else 只服务"本地双人"（没有对话方）。
+	#      ⚠️ 但是**联机未连上**时 `chat_ok` 也是假 —— 第一版把 else 写成"本地双人"，
+	#      于是联机掉线会显示"本地双人：没有对话方"，是一条纯谎话。必须按模式细分。
+	if chat_ok:
+		_chat_edit.placeholder_text = "回车发送…"
+	elif game_mode == ONLINE:
+		_chat_edit.placeholder_text = "连接中…"
+	else:
+		_chat_edit.placeholder_text = "本地双人：没有对话方"
+	# ★ 发送太快被挡下时给**看得见**的反馈（否则就是"点了没反应"）。
+	#   只写占位字 / 锁按钮，不弹窗、不往聊天记录里塞系统提示。
+	if cooling:
+		_chat_edit.placeholder_text = "发送过快…"
+	_chat_send_btn.disabled = not chat_ok or cooling
+	_voice_btn.disabled = not voice_ok
+	# ★★ 通道没了（掉线 / 已退回菜单）⇒ **自动关麦**。不关的话真实 `_tx` 还开着，
+	#   而 `_on_voice_packet_out()` 在 `_chan == null` 时直接 return ⇒ 包一个也发不出去、
+	#   按钮却亮着（"看着在说话，对面什么也听不到"），同时麦克风还在录自己。
+	#   这是把「按钮按下态 == `_voice_on` == 真实 `_tx`」钉在一起的那一步。
+	if not voice_ok and _voice_on:
+		_voice_on = false
+		_voice_btn.set_pressed_no_signal(false)
+		if _voice != null and is_instance_valid(_voice):
+			_voice.stop_tx()
+	# ★ 短语按钮必须跟着一起禁用（2026-11-02 目检补）：它们是"另一个发送入口"，
+	#   只锁输入框和发送按钮的话，本地双人档点短语会走到 `send_chat()` 里被 `can_chat()`
+	#   挡回来 —— **静默无反应**，正是本工程最忌的那种"点了没反应"。
+	#   ⚠️ 遍历子节点而不是留一个按钮数组：短语表是常量，将来改表不用同步维护第二份清单。
+	if _phrase_flow != null and is_instance_valid(_phrase_flow):
+		for c in _phrase_flow.get_children():
+			if c is Button:
+				(c as Button).disabled = not chat_ok or cooling
+	# ---- 麦克风图标（2026-11-04 起按钮无文字，状态全在图标上）----
+	# ★ `text = ""` 每次都要重申：`_make_chat_button()` 会设 text，而任何"顺手给个占位字"
+	#   的改动都会让 30px 的按钮被文字顶宽 ⇒ 整行错位。
+	_voice_btn.text = ""
+	_voice_btn.tooltip_text = "麦克风：%s（点一下%s）" % [
+			"开" if _voice_on else "关", "关麦" if _voice_on else "开麦"] \
+			if voice_ok else _voice_tip_when_blocked()
+	# ---- 对端槽上那两个小开关（静音语音 / 屏蔽发言）----
+	# ★ 静音语音用 `voice_ok`（通道不支持语音时对面根本发不出包，可点但没对象 = "点了没用"）；
+	#   屏蔽发言用 `chat_ok`（人机档 AI 会说话，这时它就是有效的）。
+	if _mute_btn != null and is_instance_valid(_mute_btn):
+		_mute_btn.disabled = not voice_ok
+		_mute_btn.tooltip_text = "静音"
+	if _block_btn != null and is_instance_valid(_block_btn):
+		_block_btn.disabled = not chat_ok
+		_block_btn.tooltip_text = "禁言"
+	_sync_glyphs()
+
+
+## 三个图标的状态与颜色一次性同步（**唯一**写入点）。
+## ★ 颜色按**抽屉面**挑（§130）：按页面底挑出来的墨色压在抽屉底上，浅色主题下会糊掉。
+## ★ 关闭态走 `on = false`（画斜杠），不是"变灰"：浅色抽屉上的灰图标几乎看不见。
+func _sync_glyphs() -> void:
+	var gink: Color = GameConfig.readable_ink_on(_drawer_surface())
+	for pair in [[_voice_glyph, _voice_on], [_mute_glyph, not _mute_remote],
+			[_block_glyph, not _block_remote]]:
+		var g: Control = pair[0]
+		if g == null or not is_instance_valid(g):
+			continue
+		var ic := g as _GlyphIcon
+		if ic == null:
+			continue
+		ic.on = bool(pair[1])
+		ic.ink = gink
+		ic.queue_redraw()
+
+
+## 麦克风按钮在"用不了"时的说明（按模式分，不按 `chat_ok` 分：人机档 chat_ok 为真
+## 但根本没有通道，写成"当前通道不支持语音"就是一句谎话）。
+func _voice_tip_when_blocked() -> String:
+	if game_mode == ONLINE:
+		return "当前通道不支持语音"
+	return "语音只在联机局可用"
+
+
+## 清洗一条聊天文本 —— **唯一**的清洗函数（发送与接收都走它）。
+## 返回 "" ⇒ 这条不该显示、也不该发。
+## ★★ 换行/控制字符必须变空格：聊天记录是单行流，`Label.autowrap_mode` 只按宽度折行、
+##   不认手动换行 ⇒ 对面发一个 `\n\n\n\n` 就能把抽屉里的记录区整个顶掉（而这不是崩溃，
+##   只是"聊天窗突然空了"，极难归因）。同时这也挡住了用控制字符做终端转义的一类脏输入。
+## ★ 长度截断放在发送端**和**接收端两处（同一个函数）：只截发送端的话，
+##   一个改过的客户端发 100KB 文本就能把对端的 `Label` 换成一块巨型排版。
+func _sanitize_chat(raw: String) -> String:
+	var acc := ""
+	for ch in raw:
+		var cp: int = ch.unicode_at(0)
+		acc += " " if cp < 32 or cp == 127 else ch
+	acc = acc.strip_edges()
+	if acc.length() > CHAT_MAX_LEN:
+		acc = acc.substr(0, CHAT_MAX_LEN)
+	return acc
+
+
+## 当前是否处在"发送过快"的冷却里（UI 派生点与 send_chat 共用这一份口径）。
+func _chat_send_cooling() -> bool:
+	return _chat_cooldown_until_ms > 0 and Time.get_ticks_msec() < _chat_cooldown_until_ms
+
+
+## 被防呆挡下：给一次可见反馈（按钮/短语锁住 + 输入行短提示），到期由 `_tick_chat()` 恢复。
+func _chat_note_cooldown(now: int) -> void:
+	_chat_cooldown_until_ms = now + chat_send_gap_ms
+	_refresh_chat_ui()
+
+
+## 发一条聊天。返回是否真的发出去了（防呆命中 / 空串 / 非联机都返回 false）。
+## ★★ 2026-11-05 防呆三层（用户口令「禁止发送消息过于频繁」）：
+##   ① 两条最小间隔（连点/回车连发）；② 短窗口内最多 N 条（刷屏）；③ 同一句话短期内不重发。
+##   三层都只挡**发送**，不丢输入框里的文字（`_on_chat_submitted` 只在 true 时清空）。
+func send_chat(text: String) -> bool:
+	var t := _sanitize_chat(text)
+	if t == "":
+		return false
+	if not can_chat():
+		return false
+	var now := Time.get_ticks_msec()
+	if _chat_last_sent_ms > 0 and now - _chat_last_sent_ms < chat_send_gap_ms:
+		_chat_note_cooldown(now)
+		return false
+	while not _chat_send_times.is_empty() and now - _chat_send_times[0] > chat_burst_window_ms:
+		_chat_send_times.pop_front()
+	if _chat_send_times.size() >= chat_burst_max:
+		_chat_note_cooldown(now)
+		return false
+	if t == _chat_last_text and now - _chat_last_sent_ms < chat_repeat_guard_ms:
+		_chat_note_cooldown(now)
+		return false
+	_chat_last_sent_ms = now
+	_chat_last_text = t
+	_chat_send_times.append(now)
+	# ★ 两档在"发出去"这一步分叉、在"记进聊天区"那一步合流：
+	#   联机 ⇒ 交给通道（对端会显示）；人机 ⇒ 本地没有对端，交给 AI 生成一句回应。
+	#   ⚠️ 人机档**没有 `_chan`**，不分支直接 `_chan.send_message()` 是空指针（见 `can_voice()` 那条）。
+	if game_mode == ONLINE and _chan != null:
+		_chan.send_message({"m": "chat", "t": t})
+	_append_chat(0, t)
+	if game_mode == VS_AI:
+		# ★ 延迟一帧再让 AI 开口：`send_chat()` 跑在输入框的 `text_submitted` 回调里，
+		#   此刻 `_append_chat(0, …)` 刚 `_rebuild_chat_log()` 完；同一帧再追加一条会让两次
+		#   "滚动到底"（也是 deferred）互相打架，症状是"有时滚到底、有时差一条"。
+		_ai_reply.call_deferred(t)
+	return true
+
+
+## 人机档：AI 对玩家一句话的回应。空串 = 这次不回（"可以有问不必答"，见 `Taunt.reply_to`）。
+## ★ 回话**不进** `_taunt_text`（那条是主动台词的 HUD 通道）：玩家刚说完话，注意力已经在
+##   聊天区了，再让一句台词去抢 HUD 的回合提示是纯打扰。
+##
+## ★★ 2026-11-03 加**打字停顿**（用户口令「回复的太快了，不像真人」）：
+##   打多久由 `Taunt.typing_ms_for()` 算（按字数 + 标点，纯函数），这里只负责等。
+##   三件事少一件就是新 bug：
+##   ① **世代号** `_reply_seq`：等待期间玩家又发一句 ⇒ 前一句作废（两句先后冒出来，
+##      而且第二句看起来像在回答第一句）。判据 ⑫ 咬这一条。
+##   ② **等待后复查局面**：这几秒里可能终局 / 进复盘 / 关掉台词总闸 / 换模式 ——
+##      那时再往记录里塞一句"对手：…"就是凭空说话（`_maybe_taunt()` 早就防了同一条）。
+##   ③ **语音/网络事件不能被这个等待阻塞**：用的是 `create_timer`（场景树计时器），
+##      不是 `OS.delay_msec()` 那种阻塞法 —— 后者会把整局卡住几百毫秒，
+##      对局动画和联机心跳全停（这一条如果写错，看起来就是"AI 一说话游戏就卡一下"）。
+func _ai_reply(text: String) -> void:
+	if not taunt_enabled:
+		return
+	if game_over or _replay != null or game_mode != VS_AI:
+		return
+	var t := _taunt_ensure()
+	if not t.loaded:
+		return
+	var line := t.reply_to(text)
+	if line == "":
+		return
+	_reply_seq += 1
+	var seq := _reply_seq
+	var wait_ms := int(round(float(t.typing_ms_for(line))
+			* clampf(taunt_typing_scale, 0.0, 10.0)))
+	if wait_ms <= 0:
+		_append_chat(1, line)
+		print("[taunt] (reply) ", line)
+		return
+	_ai_typing = true
+	_redraw_identity()
+	await get_tree().create_timer(float(wait_ms) / 1000.0).timeout
+	# ★ 先清打字态再判作废：这两步谁先都一样，但**必须都做** ——
+	#   提前 return 却不复位 `_ai_typing`，身份槽会永远显示"正在输入…"。
+	_ai_typing = false
+	# ★ 顺序：先判"还在不在场景树里"，再去碰节点。等这几秒里可能已经回主菜单 ——
+	#   那种时候连 `_redraw_identity()` 都不该调（它内部虽有 `is_instance_valid` 兜着，
+	#   但"能不能调"和"兜不兜得住"是两件事，别把正确性押在兜底上）。
+	if not is_inside_tree():
+		return                      # 等待期间换了场景
+	_redraw_identity()
+	if seq != _reply_seq:
+		return                      # 被后一句取代（或已复位）⇒ 这句不说了
+	if not taunt_enabled or game_over or _replay != null or game_mode != VS_AI:
+		return
+	_append_chat(1, line)
+	print("[taunt] (reply) ", line, " ← 停顿 ", wait_ms, "ms（", line.length(), " 字）")
+
+
+func _on_chat_submitted(text: String) -> void:
+	# ★ 发出去才清空输入框：被节流挡下时文本要留着，否则"手快连发两句"会静默丢第二句。
+	if send_chat(text) and _chat_edit != null and is_instance_valid(_chat_edit):
+		_chat_edit.text = ""
+
+
+func _on_chat_send_pressed() -> void:
+	if _chat_edit != null and is_instance_valid(_chat_edit):
+		_on_chat_submitted(_chat_edit.text)
+
+
+## 点了一个常用短语。
+## ★ 走**与打字完全相同的路径**（`send_chat()`）：节流、清洗、记录、AI 回应全都复用，
+##   不另开一条"短语专用"的发送实现 —— 两条实现迟早一条改了另一条没改。
+## ★ 返回值刻意忽略：短语就是"手快连点"的场景，被防呆挡下时不另弹窗
+##   （反馈统一由 `_chat_note_cooldown()` 写在输入行 / 按钮上，不重复一遍）。
+func _on_phrase_pressed(ph: String) -> void:
+	send_chat(ph)
+
+
+## 往聊天记录里追加一条（`slot` 0=自己 1=对端）。文字与语音状态都从这一个口进。
+func _append_chat(slot: int, text: String) -> void:
+	# ★★ 「禁言」的**唯一**拦截点。所有对方内容（联机文字、AI 台词、短语回话）
+	#   都从这一个口进，所以拦这里不会漏（§123 一类行为多条出口）。
+	# ★ 禁言期间不写显示真源 `_chat_lines`，但**暂存**对方消息：解除禁言后回放，不丢对话。
+	if slot == 1 and _block_remote:
+		var bt := _sanitize_chat(text)
+		if bt != "":
+			_chat_rx_blocked += 1
+			_chat_blocked_lines.append("%s：%s" % [_display_name_for(1), bt])
+			while _chat_blocked_lines.size() > CHAT_LOG_MAX:
+				_chat_blocked_lines.pop_front()
+		return
+	var t := _sanitize_chat(text)
+	if t == "":
+		return
+	# ★ 名字直接取（`_display_name_for` 保证非空：取不到 Steam 昵称时退回"你/对手"）。
+	#   在这里再补一句 `if who == "":` 只会多出一道"永远不触发"的分支（§111 看着有两道防线）。
+	var who := _display_name_for(slot)
+	var line := "%s：%s" % [who, t]
+	_chat_lines.append(line)
+	while _chat_lines.size() > CHAT_LOG_MAX:
+		_chat_lines.pop_front()
+	# ★★ 2026-11-08：**新消息一律回底并恢复跟随**（用户口令「主动上滑后没有自动下滑回来」）。
+	#   放的位置有讲究：必须在 `_rebuild_chat_log()` **之前** —— 它内部按 `_chat_follow`
+	#   决定"重建后是滚到底还是把旧位置还回去"（`_chat_keep_v`）。写在后面就等于
+	#   "重建时还按回看态还了位置，之后才改口说自己在跟随" ⇒ 视图停在旧位置直到下一帧补推。
+	#   ⚠️ 上一轮这里是反的（回看态下新消息不抢位置）。那条口径让"往上翻一眼"变成
+	#   "再也看不到新消息"，用户直接报障 ⇒ 以本次为准，别再翻回去。
+	_chat_follow = true
+	_chat_back_left = 0.0
+	_rebuild_chat_log()
+	# ★ 2026-11-07：聊天抽屉收起时，对方消息以气泡浮在侧边空白 ——
+	#   只认 slot==1（自己发的话已经在输入框里看得见），且禁言分支在上面已 return。
+	if slot == 1 and not _drawer_left_open:
+		_pop_chat_bubble(line)
+
+
+## 气泡的**唯一创建点**（懒加载）。挂在 `_hud_layer`：抽屉层在复盘态会整体隐藏，
+## 而气泡属于对局 HUD，跟着同一层走才不会"复盘里还挂着一句聊天"。
+func _ensure_chat_bubble() -> void:
+	if _chat_bubble != null and is_instance_valid(_chat_bubble):
+		return
+	if _hud_layer == null or not is_instance_valid(_hud_layer):
+		return
+	_chat_bubble = PanelContainer.new()
+	_chat_bubble.name = "ChatBubble"
+	var sb: StyleBox = _drawer_stylebox()
+	if sb is StyleBoxFlat:
+		var dup: StyleBoxFlat = (sb as StyleBoxFlat).duplicate()
+		dup.content_margin_left = 10.0
+		dup.content_margin_right = 10.0
+		dup.content_margin_top = 7.0
+		dup.content_margin_bottom = 7.0
+		_chat_bubble.add_theme_stylebox_override("panel", dup)
+	_chat_bubble.mouse_filter = Control.MOUSE_FILTER_STOP
+	_chat_bubble.visible = false
+	_chat_bubble.gui_input.connect(_on_chat_bubble_input)
+	_hud_layer.add_child(_chat_bubble)
+	_chat_bubble_label = Label.new()
+	_chat_bubble_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_chat_bubble_label.add_theme_font_size_override("font_size", CHAT_FONT + 2)
+	_chat_bubble_label.add_theme_color_override("font_color",
+		GameConfig.readable_ink_on(_drawer_surface()))
+	_chat_bubble_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_chat_bubble.add_child(_chat_bubble_label)
+
+
+## 摆气泡：只占 `_drawer_band(0)` 已让出的空白，**不压棋盘**（2026-10-22 那条口令）。
+## ★ x 从 24 起：`DRAWER_HANDLE_W`=18 那条"关闭抽屉"窄键贴在屏幕最外沿（2026-11-08 起），
+##   两者不许重叠，否则点气泡左边会变成"收起抽屉"。
+##   （气泡只在左抽屉**收起**时出现、那时窄键不画；这 24px 是双保险，不是当前重叠。）
+func _refit_chat_bubble() -> void:
+	if _chat_bubble == null or not is_instance_valid(_chat_bubble):
+		return
+	var vs: Vector2 = get_viewport_rect().size
+	var w: float = clampf(_drawer_band(0) - 32.0, 150.0, 230.0)
+	_chat_bubble.position = Vector2(24.0, vs.y * 0.16)
+	_chat_bubble.size = Vector2(w, maxf(_chat_bubble.get_combined_minimum_size().y, 42.0))
+
+
+func _pop_chat_bubble(line: String) -> void:
+	# 自检/截图默认不弹：headless 没有真鼠标，气泡只会给控件树判据多一个无关节点。
+	# ★ `_chat_bubble_probe` 是 `--chattest` ㉒ 的显式注入闸 —— 判据要量真实气泡，
+	#   不能靠"自己算一遍文本"假装测过（铁律 70）。
+	if GameConfig.is_automated_run() and not _chat_bubble_probe:
+		return
+	_ensure_chat_bubble()
+	if _chat_bubble == null or not is_instance_valid(_chat_bubble):
+		return
+	var txt: String = line
+	if txt.length() > chat_bubble_max_chars:
+		txt = txt.substr(0, chat_bubble_max_chars) + "…"
+	_chat_bubble_label.text = txt
+	_chat_bubble.modulate.a = 1.0
+	_chat_bubble.visible = true
+	_chat_bubble_left = maxf(0.5, chat_bubble_sec)
+	_refit_chat_bubble()
+
+
+func _dismiss_chat_bubble() -> void:
+	_chat_bubble_left = 0.0
+	if _chat_bubble != null and is_instance_valid(_chat_bubble):
+		_chat_bubble.visible = false
+
+
+## 气泡 = 「点我展开聊天」的入口（收起后再用鼠标触发展开的第二种方式）。
+func _on_chat_bubble_input(event: InputEvent) -> void:
+	if not (event is InputEventMouseButton and event.pressed \
+			and event.button_index == MOUSE_BUTTON_LEFT):
+		return
+	_dismiss_chat_bubble()
+	_drawer_reopen_latch[0] = false
+	_set_drawer_open(0, true)
+
+
+## 气泡寿命 + 末 0.4s 淡出。★ 挂在 `_process` 的 early return **之前**（静默对局里
+##   落子动画表恒空 ⇒ 放后面就是"气泡永远不消失"，同棋钟/聊天跟随那一族）。
+func _tick_chat_bubble(delta: float) -> void:
+	if _chat_bubble_left <= 0.0:
+		return
+	_chat_bubble_left -= delta
+	if _chat_bubble_left <= 0.0:
+		_dismiss_chat_bubble()
+		return
+	if _chat_bubble_left < 0.4 and _chat_bubble != null and is_instance_valid(_chat_bubble):
+		_chat_bubble.modulate.a = clampf(_chat_bubble_left / 0.4, 0.0, 1.0)
+
+
+## 把 `_chat_lines` 投影成 Label（**重建**而不是增量改）。
+## ★ 60 条上限下重建成本可以忽略，而增量维护（删最旧 + 加最新）会引入索引错位
+##   —— 那一类错只在"记录满 60 条之后"才现形，最容易被漏测。
+func _rebuild_chat_log() -> void:
+	if _chat_log == null or not is_instance_valid(_chat_log):
+		return
+	# ★★ 同步重建窗口：清空子节点的那一刻 ScrollContainer 的内容高度归零，
+	#   value 会被钳小 ⇒ `value_changed` 也会"变小"，但那是**布局副作用不是用户拉回**。
+	#   不屏蔽的话，每来一条新消息都会把自己判成"玩家往回拉了"（正是"等三秒"的第二种入口）。
+	_chat_rebuilding = true
+	# ★ 玩家往回拉时不抢滚动条：重建后把旧位置还回去（新消息只加在末尾）。
+	_chat_keep_v = 0
+	if not _chat_follow and _chat_scroll != null and is_instance_valid(_chat_scroll):
+		_chat_keep_v = _chat_scroll.scroll_vertical
+	# ★★ 先 `remove_child` 再 `queue_free`，两个动作都要有：
+	#   `queue_free()` 在本帧末才生效，只调它的话紧接着 `add_child()` 的新行会排在
+	#   **待删节点之后** ⇒ 一帧内记录区里同时存在新旧两套（60 条变 120 条）。
+	for c in _chat_log.get_children():
+		_chat_log.remove_child(c)
+		c.queue_free()
+	var ink: Color = GameConfig.readable_ink_on(_drawer_surface())
+	# ---- 禁言：聊天框只留「禁止符号 + 文字」，历史对话一条不显示 ----
+	# ★ 历史仍在 `_chat_lines` 里（只是不投影），解除禁言后连暂存的对方消息一起回来。
+	# ★ "⊘"(U+2298) 在工程字体霞鹜文楷 subset 里确有字形；⛔/🚫 缺字会显示豆腐块。
+	if _block_remote:
+		var ban := Label.new()
+		ban.name = "ChatBanned"
+		ban.text = "⊘ 禁言中"
+		ban.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		ban.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		ban.add_theme_font_size_override("font_size", CHAT_FONT + 3)
+		ban.add_theme_color_override("font_color", ink)
+		ban.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_chat_log.add_child(ban)
+		_chat_rebuilding = false
+		_finish_chat_rebuild()
+		return
+	for line in _chat_lines:
+		var lb := Label.new()
+		lb.text = line
+		lb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lb.add_theme_font_size_override("font_size", CHAT_FONT)
+		# ★ 字色按**抽屉面**挑，不按页面底（§130 那次的教训：深浅两个面搞混 ⇒ 字直接没了）。
+		lb.add_theme_color_override("font_color", ink)
+		lb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_chat_log.add_child(lb)
+	_chat_rebuilding = false
+	_finish_chat_rebuild()
+
+
+## 重建完的收尾：跟随态滚到底，回看态保持原位置。
+func _finish_chat_rebuild() -> void:
+	if _chat_follow:
+		_scroll_chat_bottom_deferred.call_deferred()
+	else:
+		_restore_chat_scroll_deferred.call_deferred()
+
+
+## 滚到底。★ 必须 deferred：`add_child()` 的同一刻 `_chat_log.size` 还是旧值，
+## 立刻滚只会滚到"上一帧的底"——症状是新消息进来时视图差一行没跟上（看着像漏了一条）。
+func _scroll_chat_bottom_deferred() -> void:
+	if _chat_scroll == null or not is_instance_valid(_chat_scroll):
+		return
+	# 给一个大数，`ScrollContainer` 自己会钳到最大可滚值。
+	_chat_scroll.scroll_vertical = 1 << 24
+
+
+## 回看态：把重建前的滚动位置还回去（引擎自己会钳到合法范围）。
+func _restore_chat_scroll_deferred() -> void:
+	if _chat_scroll == null or not is_instance_valid(_chat_scroll):
+		return
+	_chat_scroll.scroll_vertical = _chat_keep_v
+
+
+## 滚动条 value 变化的**唯一**跟随态判定（2026-11-07 新立）。
+##
+## ★ 判据是对"用户动作"的本质描述：**往回拉 = value 变小**。程序把滚动条推到底只会让它变大，
+##   内容长高只会让 `max_value` 变大（value 不动或随之变大）⇒ 两者都不会被误判成拉回。
+##   ⚠️ 别再回到"每帧读 at_bottom 反推"那条路：`max_value` 滞后一帧，**新消息进来的那一帧
+##   必然暂时离底** —— 那正是"等三秒"的根因。
+## ★ 贴底（含 `CHAT_STICK_SLACK` 容差）⇒ 立刻恢复跟随，不等倒计时；这样用户自己滚回底部
+##   时，下一条新消息马上就能跟到最新。
+func _on_chat_scroll_value_changed(v: float) -> void:
+	# ★ 比较基准必须在覆盖 `_chat_last_v` **之前**取，否则 `was == v` ⇒ "变小"永远不成立。
+	var was: float = _chat_last_v
+	_chat_last_v = v
+	# ★ 重建窗口里的 value 变化（清空子节点 ⇒ 高度归零 ⇒ 钳位）不是用户动作：
+	#   只更新比较基准，不动跟随态。
+	if _chat_rebuilding:
+		return
+	if _chat_scroll == null or not is_instance_valid(_chat_scroll):
+		return
+	var bar := _chat_scroll.get_v_scroll_bar()
+	if bar == null:
+		return
+	if v >= bar.max_value - bar.page - CHAT_STICK_SLACK:
+		_chat_follow = true
+		_chat_back_left = 0.0
+	elif v < was - 0.5:
+		_chat_follow = false
+		# ★ 2026-11-08：倒计时初值就是配置值（不再有 "0 ⇒ 不给倒计时" 那条特殊分支）——
+		#   0 的语义现在统一由 `_tick_chat()` 的 `> 0.0` 判，两个地方不再各判一次（§133）。
+		_chat_back_left = maxf(0.0, chat_stick_return_sec)
+	# 其余（value 变大但还没到底 / 引擎因内容变化钳位）不动跟随态 —— 交给 `_tick_chat()` 补推。
+
+## 每帧两件事（必须在 `_process` 的"没动画就早退"之前）：
+## ① 发送冷却到点 ⇒ 恢复发送入口（唯一派生点 `_refresh_chat_ui`）；
+## ② 聊天框跟随：**跟随态保证贴底**（补布局滞后那一帧），回看态倒计时到点就自动回底。
+## ★★ 不再有"离底 ⇒ 判定用户拉回"这条反推（见 `_on_chat_scroll_value_changed()` 的注）。
+## ★ 回底有两条路：新消息走 `_append_chat()`（立刻），静置走这里的倒计时（`chat_stick_return_sec`）。
+func _tick_chat(delta: float) -> void:
+	if _chat_cooldown_until_ms > 0 and Time.get_ticks_msec() >= _chat_cooldown_until_ms:
+		_chat_cooldown_until_ms = 0
+		_refresh_chat_ui()
+	if _chat_scroll == null or not is_instance_valid(_chat_scroll):
+		return
+	var bar := _chat_scroll.get_v_scroll_bar()
+	if bar == null:
+		return
+	if _chat_follow:
+		# ★ 内容长高后 `max_value` 下一帧才更新：只在 rebuild 时滚一次会停在"上一帧的底"
+		#   （看着像漏了一条）。这里每帧补一次；滚到底只会让 value 变大 ⇒ 不会被信号误判。
+		if bar.value < bar.max_value - bar.page - 0.5:
+			_scroll_chat_bottom_deferred.call_deferred()
+		return
+	# 回看态：倒计时到点就自动回底并恢复跟随（用户口令「主动上滑后没有自动下滑回来」）。
+	# ★ `chat_stick_return_sec <= 0` ⇒ 这条不生效，只剩 `_append_chat()` 那条"新消息才回底"。
+	if _chat_back_left > 0.0:
+		_chat_back_left -= delta
+		if _chat_back_left <= 0.0:
+			_chat_follow = true
+			_chat_back_left = 0.0
+			_scroll_chat_bottom_deferred.call_deferred()
+
+
+## 输入框是否持有焦点。`_input()` 的焦点闸读它 —— 这是"打字时不要触发对局快捷键"的唯一判据。
+func _chat_has_focus() -> bool:
+	return _chat_edit != null and is_instance_valid(_chat_edit) and _chat_edit.has_focus()
+
+
+# ---------------------------------------------------------------- 语音
+
+## 惰性创建语音引擎。★ 单机/人机局永不创建（理由见变量声明处）。
+func _ensure_voice() -> VoiceChat:
+	if _voice != null and is_instance_valid(_voice):
+		return _voice
+	_voice = VoiceChat.new()
+	_voice.name = "VoiceChat"
+	add_child(_voice)
+	_apply_voice_config(_voice)
+	# ★ 出包只交给通道，本类不认识 Steam（`VoiceChat` 也不认识）⇒ 换通道时零改动。
+	_voice.packet_out.connect(_on_voice_packet_out)
+	return _voice
+
+
+## 把**设置页里调过的**语音参数灌进实例（唯一灌点）。
+## ★★ 不灌的后果是静默的：`VoiceChat` 的 `@export` 默认值每次 `new()` 都回到 1.0 / 2 包，
+##   玩家在设置里调的增益与抖动在**下一局就失效**，而且一句话都不报错
+##   （症状只是"我明明调过，怎么又听不清了"）。`--mictest` ⑦ 盯着这条。
+func _apply_voice_config(v: VoiceChat) -> void:
+	v.input_gain = clampf(GameConfig.voice_input_gain, 0.2, 3.0)
+	v.output_gain = clampf(GameConfig.voice_output_gain, 0.0, 2.0)
+	v.jitter_packets = clampi(GameConfig.voice_jitter, 1, 6)
+	v.vad_rms = clampf(GameConfig.voice_vad, 0.0, 0.2)
+	# 设备：空串 = 系统默认，**不要去设**（设成 "" 在某些平台上会清掉系统默认设备）。
+	if GameConfig.voice_input_device != "":
+		AudioServer.input_device = GameConfig.voice_input_device
+	# 扬声器：与麦克风不同，`""` 对输出侧是**合法值**（= 系统默认），不会像输入那样
+	#   把设备清没；所以这里交给 `GameConfig.apply_audio_output_device()` 统一处理（幂等）。
+	# ★ 为什么对局里也要应用、而不是只在设置页应用：设置页那次只活在**当前进程**里，
+	#   玩家换完耳机重启游戏后，语音会回到系统默认设备 —— 而玩家看不到任何提示，
+	#   只会觉得"对面声音从耳机跑到外放了"。真源落盘 + 这里应用，才算闭环。
+	GameConfig.apply_audio_output_device()
+
+
+func _on_voice_packet_out(bytes: PackedByteArray) -> void:
+	if _chan == null:
+		# ★ 兜底：通道没了还开着麦 = 一边录自己一边把包全丢掉（最坏的那种隐私事故：
+		#   玩家以为关了，其实麦克风一直活着）。正常路径由 `_refresh_chat_ui()` 关麦，
+		#   但那条只在刷新时跑；这里每包都看一眼，最坏晚一包（40ms）关掉。
+		#   直接复用 `_refresh_chat_ui()` 而不就地写一套：它已经把"关麦 + 复位按钮 + 改文案"
+		#   三件事钉成一条线，重写一份迟早会漏掉其中一件。
+		_refresh_chat_ui()
+		return
+	_chan.send_voice(bytes)
+
+
+## 对端语音包入站（由 `NetChannel.voice_received` 转来，`SteamTransport` 是唯一实现）。
+func _on_voice_packet_in(bytes: PackedByteArray) -> void:
+	if _voice == null or not is_instance_valid(_voice):
+		return
+	# ★★ 静音判断放在**解码之前**（`rx_push` 的第一件事就是 `decode_packet`）：
+	#   放到解码之后等于"静音了照样烧 CPU"，而且队列里还是会有音频。
+	#   `_voice_rx_muted` 是"静音真的在拦包"的现场证据（只印不判，见声明处）。
+	if _mute_remote:
+		_voice_rx_muted += 1
+		return
+	_voice.rx_push(bytes)
+
+
+## 自己麦克风的开 / 关（唯一入口：按钮的 `toggled`）。
+## ★★ 失败必须**当场弹回按钮**并写理由：headless / 项目没开 `enable_input` / 无音频驱动
+##   三种情形都表现为"按钮亮着、对面听不见"，而且一句错都不报（§96 静默失败）。
+##   弹回用 `set_pressed_no_signal()` 而不是 `button_pressed = false`：后者会再发一次
+##   `toggled` ⇒ 递归回本函数（幂等但会把日志刷两遍）。
+func _on_voice_toggled(on: bool) -> void:
+	if not on:
+		_voice_on = false
+		if _voice != null and is_instance_valid(_voice):
+			_voice.stop_tx()
+		_refresh_chat_ui()
+		return
+	if not can_voice():
+		# 没通道（人机 / 本地双人 / 联机未连上）：按钮不该亮着 —— 亮着就是谎话。
+		_voice_on = false
+		_voice_btn.set_pressed_no_signal(false)
+		_refresh_chat_ui()
+		return
+	var v := _ensure_voice()
+	var ok: bool = v != null and v.start_tx()
+	if not ok:
+		_voice_on = false
+		_voice_btn.set_pressed_no_signal(false)
+		var why: String = v.mic_reason() if v != null else "语音引擎不可用"
+		_voice_btn.tooltip_text = "麦克风不可用：%s" % why
+		print("[voice] 麦克风不可用：", why)
+		_refresh_chat_ui()
+		return
+	_voice_on = true
+	_refresh_chat_ui()
+
+
+## 对方语音静音（单向，只影响本机）。
+## ★★ 两个动作缺一不可：
+##   ① 入站丢包（`_on_voice_packet_in` 早退）—— 不再解码、不再进队列；
+##   ② **当场** `flush_rx()` —— 只做 ① 的话，抖动缓冲 + 生成器里还压着 0.2~0.3 秒
+##      已经解码好的声音，静音之后仍在响，主观上就是"我点了静音它还在说话"。
+func _on_mute_remote_toggled(on: bool) -> void:
+	_mute_remote = on
+	if on and _voice != null and is_instance_valid(_voice):
+		_voice.flush_rx()
+	_refresh_chat_ui()
+
+
+## 禁言他发言（文字）。★ 与「静音他说话」是两个**独立**开关。
+## ★★ 拦截点在 `_append_chat()`（所有对方内容的唯一入口），这里只管状态与视图：
+##   开启 ⇒ 重建聊天框为「⊘ 禁言中」（历史不显示）；
+##   解除 ⇒ 把禁言期间暂存的对方消息**按序回放**到记录里，再重建（历史 + 期间的对话都在）。
+func _on_block_remote_toggled(on: bool) -> void:
+	_block_remote = on
+	if not on:
+		for line in _chat_blocked_lines:
+			_chat_lines.append(line)
+		while _chat_lines.size() > CHAT_LOG_MAX:
+			_chat_lines.pop_front()
+		_chat_blocked_lines.clear()
+		_chat_rx_blocked = 0
+	# ★ 切换禁言视图后一律回到"跟随最新"：解除时玩家要看见刚回放的那几句，
+	#   而不是留在几分钟前翻到的旧位置。
+	_chat_follow = true
+	_chat_back_left = 0.0
+	_rebuild_chat_log()
+	_refresh_chat_ui()
+
+
+## 收摊：回菜单 / 换场景时调。不调的话麦克风与采集 bus 会跟着下一个场景活着
+## （症状：回菜单后还在录，用户看不见、也不报错）。
+## ★ 复位三个状态真源 + 两个按钮的按下态：否则回菜单再开一局，按钮可能亮着而
+##   `_voice_on` 是 false（或反过来）—— 那种不一致比功能缺失更难查。
+func _shutdown_voice() -> void:
+	_voice_on = false
+	_mute_remote = false
+	_block_remote = false
+	_voice_rx_muted = 0
+	_chat_rx_blocked = 0
+	_chat_blocked_lines.clear()
+	_chat_send_times.clear()
+	_chat_last_text = ""
+	_chat_cooldown_until_ms = 0
+	_chat_follow = true
+	_chat_back_left = 0.0
+	_peer_hover = false
+	if _voice_btn != null and is_instance_valid(_voice_btn):
+		_voice_btn.set_pressed_no_signal(false)
+	for b in [_mute_btn, _block_btn]:
+		if b != null and is_instance_valid(b):
+			(b as Button).set_pressed_no_signal(false)
+			(b as Button).visible = false
+	if _voice != null and is_instance_valid(_voice):
+		_voice.shutdown()
 
 
 func _make_identity_slot(slot: int) -> Control:
@@ -17552,7 +19702,98 @@ func _make_identity_slot(slot: int) -> Control:
 	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	c.draw.connect(_draw_identity_slot.bind(c, slot))
 	_drawer_left_body.add_child(c)
+	# ★ 只有**对端**槽需要这两个开关（自己那一槽没什么可静音的）。
+	if slot == 1:
+		_build_peer_actions(c)
 	return c
+
+
+## 对端身份槽上「鼠标移上去才出现」的两个开关：静音他说话 / 屏蔽他发言。
+##
+## ★★ 为什么挂在身份槽上而不是聊天区（用户 2026-11-04 口令）：
+##   这两个开关操作的**对象是人**，不是"聊天记录"这个面板。玩家想静音某人时，
+##   视线落点就是"对手那一栏"；放在聊天区底部，等于要玩家先想到"这功能在下面"。
+##
+## ★★ 为什么是悬停才出现：两者都是**低频**操作（多数对局一次都不用）。常驻会一直
+##   占着名字右侧的宽度 —— 槽只有 172px，名字+状态本来就已经在 `_ellipsize()` 了。
+##
+## ★ 悬停层（`_peer_actions`）**常驻 visible**，只有两个按钮随 hover 显隐：
+##   不可见的 Control 不参与鼠标拾取 ⇒ 悬停层自己也藏起来的话，`mouse_entered`
+##   永远不会发，两个按钮就再也出不来（这就是"鼠标移上去没反应"的死锁）。
+func _build_peer_actions(host: Control) -> void:
+	var ov := Control.new()
+	ov.name = "PeerActions"
+	host.add_child(ov)
+	ov.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# ★ PASS 而不是 STOP：槽自己本来是 IGNORE（不吃事件），悬停层只要**收得到**
+	#   `mouse_entered/exited`；STOP 会把"点槽"这件事从抽屉面板那里截走。
+	ov.mouse_filter = Control.MOUSE_FILTER_PASS
+	ov.mouse_entered.connect(_on_peer_hover.bind(true))
+	ov.mouse_exited.connect(_on_peer_hover.bind(false))
+	_peer_actions = ov
+	# 两个按钮：i=0 上（静音语音），i=1 下（禁言）。
+	# ★★ 2026-11-05：从「槽右端横排、垂直居中」改成**右侧一列竖排**。
+	#   横排居中时按钮正压在两行文字上（y 16~40 覆盖名字与状态行），状态行又没截断
+	#   ⇒ 图标盖住文字末端一小块。竖排只占右侧 28px 的一列，文字恒定让出这一列，
+	#   两行都不与按钮相交；名字也不会再在悬停瞬间突然变短。
+	# ★ anchors 只管右边缘，纵向按槽高居中算：改 NET_ID_SLOT_H / PEER_ACT_W 不会错位。
+	var band_h: float = PEER_ACT_W * 2.0 + PEER_ACT_GAP
+	var y0: float = (NET_ID_SLOT_H - band_h) * 0.5
+	for i in 2:
+		var b := Button.new()
+		b.name = "PeerMute" if i == 0 else "PeerBlock"
+		b.toggle_mode = true
+		b.focus_mode = Control.FOCUS_NONE
+		# flat：这一组只在悬停时出现，常驻描边框会让"条目本身"看起来像按钮堆。
+		b.flat = true
+		b.visible = false
+		b.anchor_left = 1.0
+		b.anchor_right = 1.0
+		b.anchor_top = 0.0
+		b.anchor_bottom = 0.0
+		b.offset_right = -PEER_ACT_PAD
+		b.offset_left = b.offset_right - PEER_ACT_W
+		b.offset_top = y0 + float(i) * (PEER_ACT_W + PEER_ACT_GAP)
+		b.offset_bottom = b.offset_top + PEER_ACT_W
+		var g := _GlyphIcon.new()
+		g.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if i == 0:
+			_mute_btn = b
+			g.kind = "speaker"
+			_mute_glyph = g
+			b.tooltip_text = "静音"
+			b.toggled.connect(_on_mute_remote_toggled)
+		else:
+			_block_btn = b
+			g.kind = "chat"
+			_block_glyph = g
+			b.tooltip_text = "禁言"
+			b.toggled.connect(_on_block_remote_toggled)
+		b.add_child(g)
+		g.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		ov.add_child(b)
+
+
+## 对端槽的悬停进 / 出。★ `exited` 时再按矩形复核一次：鼠标移到两个按钮上时
+## Godot 不一定补发 `entered`，但反过来"从按钮边缘滑出去"偶尔会先发一次 `exited`，
+## 不复核的话按钮会在指针还压着它的时候消失（点不中）。
+func _on_peer_hover(inside: bool) -> void:
+	var now: bool = _peer_actions != null and is_instance_valid(_peer_actions) \
+			and _peer_actions.get_global_rect().has_point(get_global_mouse_position())
+	_peer_hover = inside or now
+	for b in [_mute_btn, _block_btn]:
+		if b != null and is_instance_valid(b):
+			b.visible = _peer_hover
+	# 按钮的按下态/禁言态由图标斜杠表达，重绘一下身份槽让状态看着是"当场生效"。
+	_redraw_identity()
+
+
+## 对端槽右侧被那一列按钮**永久**占掉的宽度。
+## ★ 绘制（`_draw_identity_slot` 的 `text_w`）与按钮几何共用这一份。
+## ★★ 与 hover 无关（2026-11-05）：常量让位 ⇒ 按钮永远落在文字之外，
+##   且悬停时名字不会突然截断一截（旧口径只在 hover 时缩，文字会跳一下）。
+func _peer_action_band() -> float:
+	return PEER_ACT_W + PEER_ACT_PAD + 4.0
 
 
 ## 摆抽屉：面板 / 内容 / 把手三者的矩形全部来自几何真源（`_drawer_rect()` /
@@ -17560,6 +19801,13 @@ func _make_identity_slot(slot: int) -> Control:
 ## ★ 由 `_refit_hud()` 调（它已经连着 `viewport.size_changed`）—— 不另连一个信号：
 ##   两处各自连 `size_changed` 会在同一帧里各排一次，而且迟早有一处忘记解绑。
 func _refit_drawers() -> void:
+	# ★★ 自动化运行（自检/截图）：动画 t 直接落到意图终态。
+	#   否则 `--shotend` 这类"先把抽屉折起来再终局"的档会截到半途的面板，
+	#   而判据读的是纯几何（不受 t 影响）⇒ 图与判据对不上，且不会报红。
+	if GameConfig.is_automated_run():
+		_drawer_left_t = 1.0 if _drawer_left_open else 0.0
+		_drawer_right_t = 1.0 if _drawer_right_open else 0.0
+		_drawer_slide_applied = Vector2(-1.0, -1.0)
 	# ★★ 第一件事：**按当前几何重算棋盘**。
 	#   抽屉带宽会因三件事变化 —— 视口尺寸 / 用户开合 / `game_mode` 变联机，而棋盘必须
 	#   跟着重算，否则"先缩好盘、后来才出现左抽屉"就会直接压上去。
@@ -17575,27 +19823,23 @@ func _refit_drawers() -> void:
 	# ---- 左 ----
 	if _drawer_left_panel != null and is_instance_valid(_drawer_left_panel):
 		var lr := _drawer_rect(0)
-		_drawer_left_panel.position = lr.position
 		_drawer_left_panel.size = lr.size
-		_drawer_left_panel.visible = _drawer_shows(0)
+		_drawer_left_panel.position = lr.position
 	if _drawer_left_handle != null and is_instance_valid(_drawer_left_handle):
 		var lh := _drawer_handle_rect(0)
-		_drawer_left_handle.position = lh.position
 		_drawer_left_handle.size = lh.size
-		_drawer_left_handle.visible = _drawer_available(0)
-		_drawer_left_handle.text = "<" if _drawer_wants_open(0) else ">"
+		# ★★ 2026-11-07 二次返工：**收起按钮改为可见**（用户「收回的按钮在哪里」）。
+		#   visible / position.x 由 `_apply_drawer_slide()` 按动画进度唯一写入（铁律 8）；
+		#   这里只管尺寸 —— 收起态不画，展开态跟着面板一起滑进来。
+		#   几何真源 `_drawer_handle_rect()` 保留：`judge_drawer_layout()` 仍量它守"不压棋盘"。
 	# ---- 右 ----
 	if _drawer_right_panel != null and is_instance_valid(_drawer_right_panel):
 		var rr := _drawer_rect(1)
-		_drawer_right_panel.position = rr.position
 		_drawer_right_panel.size = rr.size
-		_drawer_right_panel.visible = _drawer_shows(1)
+		_drawer_right_panel.position = rr.position
 	if _drawer_right_handle != null and is_instance_valid(_drawer_right_handle):
 		var rh := _drawer_handle_rect(1)
-		_drawer_right_handle.position = rh.position
 		_drawer_right_handle.size = rh.size
-		_drawer_right_handle.visible = _drawer_available(1)
-		_drawer_right_handle.text = ">" if _drawer_wants_open(1) else "<"
 	# ---- 左抽屉内容：位置由面板内的内容矩形给，尺寸由 `_refit_net_identity()` 给 ----
 	if _drawer_left_body != null and is_instance_valid(_drawer_left_body):
 		var cr := drawer_content_rect(0)
@@ -17607,16 +19851,26 @@ func _refit_drawers() -> void:
 		# ★★ 2026-10-22 修（用户报「抽屉收起仍有按钮在」）：`_hud_box` **不是**
 		#   `_drawer_right_panel` 的子节点（它是 `_hud_layer` 下的自由 VBox），所以面板一隐藏，
 		#   那一簇按钮**留在原地**：没底板、浮在棋盘右边，看着像一片孤儿按钮。
-		#   ⇒ 面板与内容必须**同生同灭**，"内容跟着抽屉走"这件事只在这一处派生。
-		#   ⚠️ 这里用 `.visible`（我们写的那个量）而不是 `is_visible_in_tree()`：`_hud_layer`
-		#     在复盘态会整体隐藏，用后者会让这一条在那些档下恒假（§131 的另一面）。
-		_hud_box.visible = _drawer_shows(1)
+		#   ⇒ 面板与内容必须**同生同灭**。★ 2026-11-07 起这句 `visible` 由
+		#     `_apply_drawer_slide()` 按**动画进度**写（推入过程中还要继续显示），
+		#     这里直接写 `_drawer_shows()` 会把动画第一帧就掐掉。
+		#   ⚠️ 仍用 `.visible` 而不是 `is_visible_in_tree()`：`_hud_layer` 在复盘态
+		#     会整体隐藏，用后者会让这一条在那些档下恒假（§131 的另一面）。
 		var cr2 := drawer_content_rect(1)
 		# 高度取「容器算出来的 size.y」与「组合最小高」的较大者 —— 首帧 `size.y` 还可能是 0，
 		# 只信它的话第一帧会把整簇按钮压在面板顶边上（看起来像闪了一下）。
 		var hbox_h: float = maxf(_hud_box.size.y, _hud_box.get_combined_minimum_size().y)
 		_hud_box.position = cr2.position
 		_hud_box.size = Vector2(cr2.size.x, hbox_h)
+	# ---- 最后一步：把**当前动画位置**盖到最终几何上 ----
+	# ★ 顺序不能反：`_apply_drawer_slide()` 只改 position.x / visible，上面这些尺寸与
+	#   内容矩形必须先写好。窗口 resize 与逐帧动画共用这一处应用点（铁律 8）。
+	_apply_drawer_slide(0)
+	_apply_drawer_slide(1)
+	_drawer_slide_applied = Vector2(_drawer_left_t, _drawer_right_t)
+	# 窗口/抽屉重排后气泡也要跟着回到"侧边空白"里，否则会留在旧位置压到盘上。
+	if _chat_bubble_left > 0.0:
+		_refit_chat_bubble()
 
 
 ## 身份槽只需**定尺寸**：位置由 `_drawer_left_body`（VBoxContainer）排。
@@ -17634,12 +19888,19 @@ func _refit_net_identity() -> void:
 ## ★ 必须是"唯一"：`game_mode` 的写点不止一处（开局 / 返回菜单 / 复盘退出），
 ##   而 `_update_hud()` 在所有写点之后都会被调用 ⇒ 可见性挂在这里就不会漏。
 func _refresh_net_extras() -> void:
-	var online: bool = game_mode == ONLINE
+	# ★ 聊天可用性（2026-11-01）**必须排在下面两个早退之前**：
+	#   `_drawer_layer` 还没建好 / 非联机态时都会 return，而"输入框能不能打字"是
+	#   独立于抽屉绘制的事情 —— 摆在后面就会出现"从联机回到单机、输入框还能打"（静默）。
+	_refresh_chat_ui()
 	if _drawer_layer == null or not is_instance_valid(_drawer_layer):
 		return
-	_drawer_layer.visible = online
-	if not online:
-		return
+	# ★★ 2026-11-02：可见性口径从"联机态"改成"**不在复盘态**"。
+	#   左抽屉现在所有模式都有内容（身份槽 / 表情 / 聊天区），用户口令「单人模式下也加上左抽屉」。
+	#   复盘态仍然收起：盘面是"重放的过去"，身份槽上写「执黑 · 落子中 / 等待」会与复盘游标
+	#   自相矛盾，而复盘自带底部工具条，不需要这一列。
+	# ★ 函数名保留 `_net_` 前缀（铁律 §113：按名字认它的地方会静默失效，改名连带面太大），
+	#   但它现在管的是"对局外的附加 HUD 要不要出现"，不再绑联机。
+	_drawer_layer.visible = _replay == null
 	_refit_drawers()
 	_redraw_identity()
 
@@ -17661,22 +19922,47 @@ func _steam_id_for(slot: int) -> int:
 	return 0
 
 
+## 每个槽执哪一色。联机按 `_net_color`（座位可选）；人机 / 本地按固定座位。
+## ★ 2026-11-02：原来只有联机一支，单机下左抽屉不显示所以没人问过"slot 执哪色"。
+##   现在左抽屉在单机也画，这一支必须给出**真实**执色 —— 否则身份槽会写"执黑"而实际执白。
 func _color_for_slot(slot: int) -> int:
-	if slot == 0:
-		return _net_color
-	return _opposite_stone(_net_color)
+	if game_mode == ONLINE:
+		return _net_color if slot == 0 else _opposite_stone(_net_color)
+	if game_mode == VS_AI:
+		return PLAYER_COLOR if slot == 0 else AI_COLOR
+	return Stone.BLACK if slot == 0 else Stone.WHITE
 
 
 ## 名字：Steam 昵称优先，取不到退回"你 / 对手"。
 ## ★ 退回值是**必须**有的：无 Steam（编辑器自检 / 单机调试）时 `persona_of()` 返回 ""，
 ##   直接拿去画就是两个空槽，看起来像"身份条坏了"。
+## ★ 2026-11-02 起按模式分派：单机没有人可问，身份槽改用**对局内的真实身份**
+##   （人机 = "你" vs 档名；本地双人 = 黑方/白方）。这也正是将来"AI 对手像真人一样聊天"
+##   要挂名字的那一处 —— 到时候只需换 `_ai_opponent_label()` 的取值来源。
 func _display_name_for(slot: int) -> String:
+	if game_mode != ONLINE:
+		if game_mode == VS_AI:
+			return "你" if slot == 0 else _ai_opponent_label()
+		return "黑方" if slot == 0 else "白方"
 	var sid := _steam_id_for(slot)
 	if sid != 0:
 		var p := SteamNet.persona_of(sid)
 		if p != "":
 			return p
 	return "你" if slot == 0 else "对手"
+
+
+## 人机档里"对手是谁"。四档的实例分布见 `_ready()` 里那段长注释。
+## ★ 优先级必须与**真正在下棋的那个引擎**逐字一致（疾风 → 流水 → 野马 → 磐石）：
+##   菜单保证三者互斥，但万一同时为真，身份槽报错档名就成了"玩家的 AI 其实是另一个"的错觉。
+func _ai_opponent_label() -> String:
+	if xg_play_mode:
+		return "疾风"
+	if liushui_play_mode:
+		return "流水"
+	if yema_play_mode:
+		return "野马"
+	return "磐石"
 
 
 func _identity_state_text(slot: int) -> String:
@@ -17689,6 +19975,27 @@ func _identity_state_text(slot: int) -> String:
 			parts.append("已准备" if _ready_set.has(col) else "未准备")
 		else:
 			parts.append("对局中")
+	elif game_mode == VS_AI and slot == 1:
+		# AI 那一槽：让玩家一眼看得出"它在想"还是"该我下"
+		if game_over:
+			parts.append("对局结束")
+		# ★ 2026-11-03：打字停顿期间显示"正在输入"。
+		#   为什么这一行必须排在"思考中"之前：等待回话时 `is_ai_thinking` 可能同时为真，
+		#   而此刻玩家刚说完话、正在等回应 —— 报"思考中"会让人以为它在算棋，不是在回话。
+		#   ★ 四个字与"思考中"同宽（副标题只有 ~106px，多一个字就会被 `_ellipsize` 吃掉，
+		#     截成"执白 · 正在输…"比不显示还难看）。
+		elif _ai_typing:
+			parts.append("正在输入")
+		# ★ 2026-11-08：删掉「思考中」副标题（同一条用户口令）。AI 那一槽等待时就报「等待」——
+		#   它陈述的是「这一槽没在落子」，不含「正在思考」那层提示。
+		else:
+			parts.append("等待")
+	else:
+		# 本地双人 / 人机自己那一槽：只报"轮到谁"，其余信息棋盘上本来就看得到
+		if game_over:
+			parts.append("对局结束")
+		elif current_player == col:
+			parts.append("落子中")
 	return " · ".join(parts)
 
 
@@ -17714,36 +20021,27 @@ func _draw_identity_slot(node: Control, slot: int) -> void:
 	var av_rect: Rect2 = _avatar_rect_in_slot(r.size)
 	var av_c: Vector2 = av_rect.get_center()
 	var dia: float = av_rect.size.x
-	# ---- 头像圆里画什么：说话中 → 表情；否则 → Steam 头像 / 首字占位 ----
-	# ★★ 2026-10-22（用户口令「表情包不要遮挡棋盘」）：表情就画在这里。
-	#   这块区域 ⊂ 身份槽 ⊂ 左抽屉内容区 ⊂ 抽屉面板，而抽屉面板与棋盘不相交
-	#   （`--drawertest` ① 钉着）⇒ "表情压到盘上"结构上不可能，不是靠调坐标。
-	var emote_a: float = emote_slot_alpha(slot)
-	_last_emote_alpha[slot] = emote_a
-	_last_emote_left[slot] = _emote_bubble_left[slot]
-	if emote_a > 0.0 and Emotes.is_valid(_emote_bubble_idx[slot]):
-		_draw_ticks["bubble"] = int(_draw_ticks.get("bubble", 0)) + 1
-		# 表情半径取头像圆的 0.42（不是 0.5）：留一圈让下面的圆环仍然读得出"这是谁"。
-		Emotes.draw_emote(node, _emote_bubble_idx[slot], av_c, dia * 0.42,
-				Color(ink.r, ink.g, ink.b, emote_a),
-				Color(accent.r, accent.g, accent.b, emote_a))
+	# ---- 头像圆里画什么：Steam 头像 / 首字占位 ----
+	# ⚰️ 2026-11-02 墓碑（名字不许回收）：这里原有第三档 —— "说话中 → 画表情"（表情画在头像圆里；
+	#   圆 ⊂ 身份槽 ⊂ 左抽屉内容区，结构上到不了棋盘，所以当年才敢把气泡从棋盘上挪到这里）。
+	#   表情整套删除后只剩两档。
+	#   ★ 占位分支**必须保留**（无 Steam / 头像没下载下来 / 对方没设头像），
+	#     否则那几种情形下玩家看到的是"两个空槽"。
+	var tex: Texture2D = _avatar_tex[slot]
+	if tex != null and is_instance_valid(tex):
+		node.draw_texture_rect(tex, Rect2(av_c - Vector2(dia, dia) * 0.5, Vector2(dia, dia)), false)
 	else:
-		var tex: Texture2D = _avatar_tex[slot]
-		if tex != null and is_instance_valid(tex):
-			node.draw_texture_rect(tex, Rect2(av_c - Vector2(dia, dia) * 0.5, Vector2(dia, dia)), false)
-		else:
-			# 占位：淡 ink 圆 + 名字首字。**这条分支必须存在**（无 Steam / 头像没下载下来 /
-			# 对方没设头像），否则那几种情形下玩家看到的是"两个空槽"。
-			# ★ 用 ink 的 alpha 而不是 accent：accent 在浅色主题下本身就是深色，
-			#   28% 的深棕圆看着像"禁用/离线"（2026-10-21 目检）。
-			node.draw_circle(av_c, dia * 0.5, Color(ink.r, ink.g, ink.b, 0.12))
-			var f0 := UITheme.body_font()
-			if f0 != null:
-				var ini: String = _display_name_for(slot).substr(0, 1)
-				var fs0 := int(dia * 0.42)
-				var tw: float = f0.get_string_size(ini, HORIZONTAL_ALIGNMENT_LEFT, -1, fs0).x
-				node.draw_string(f0, av_c + Vector2(-tw * 0.5, fs0 * 0.36), ini,
-						HORIZONTAL_ALIGNMENT_LEFT, -1, fs0, ink)
+		# 占位：淡 ink 圆 + 名字首字。
+		# ★ 用 ink 的 alpha 而不是 accent：accent 在浅色主题下本身就是深色，
+		#   28% 的深棕圆看着像"禁用/离线"（2026-10-21 目检）。
+		node.draw_circle(av_c, dia * 0.5, Color(ink.r, ink.g, ink.b, 0.12))
+		var f0 := UITheme.body_font()
+		if f0 != null:
+			var ini: String = _display_name_for(slot).substr(0, 1)
+			var fs0 := int(dia * 0.42)
+			var tw: float = f0.get_string_size(ini, HORIZONTAL_ALIGNMENT_LEFT, -1, fs0).x
+			node.draw_string(f0, av_c + Vector2(-tw * 0.5, fs0 * 0.36), ini,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, fs0, ink)
 	# 头像圆环：自己是主题强调色（"这一条是我"），对端是墨色淡环。
 	# ★ `antialiased = false` —— 铁律 §128：自绘图元带抗锯齿会在退出时偶发 0xC0000005。
 	var ring := Color(accent.r, accent.g, accent.b, 0.75) if slot == 0 \
@@ -17753,17 +20051,29 @@ func _draw_identity_slot(node: Control, slot: int) -> void:
 	if f == null:
 		return
 	var text_x := 6.0 + dia + 8.0
-	var text_w: float = r.size.x - 6.0 - dia - 8.0 - 8.0
+	# ★ 对端槽右侧恒定让出那一列按钮的宽度（`_peer_action_band()`），与悬停无关。
+	#   让出的是**截断宽度** ⇒ 两行文字都自动变短，而不是被图标压住末端。
+	# ⚠️ 只有 slot 1 让：自己那一槽没有按钮，跟着缩纯属白丢宽度。
+	var band: float = _peer_action_band() if slot == 1 else 0.0
+	var text_w: float = r.size.x - 6.0 - dia - 8.0 - 8.0 - band
 	var align := HORIZONTAL_ALIGNMENT_LEFT
 	var name_txt := _ellipsize(f, _display_name_for(slot), text_w, 15)
 	node.draw_string(f, Vector2(text_x, r.size.y * 0.46), name_txt, align, text_w, 15, ink)
-	# 第二行：说话中临时显示表情名（头像上画的那个），否则显示执色/准备状态。
+	# 第二行：有台词时显示台词（截断），否则显示执色/准备状态。
 	# ★ 换掉的只是**这一行**，名字那行不动 —— 否则"谁在说话"反而认不出来了。
-	var sub_txt: String = _identity_state_text(slot)
+	var sub_txt: String = _ellipsize(f, _identity_state_text(slot), text_w, 12)
 	var sub_a: float = 0.72
-	if emote_a > 0.0 and Emotes.is_valid(_emote_bubble_idx[slot]):
-		sub_txt = Emotes.name_of(_emote_bubble_idx[slot])
-		sub_a = maxf(emote_a, 0.45)     # 淡出时别把字一起淡没了（头像淡是"消失"，字淡是"看不清"）
+	# ★ AI 台词（2026-11-02）：只在 **AI 那一槽**（slot 1）显示。
+	#   ⚰️ 这一天之前这里还有一档"表情优先"（表情名压过状态文字），随表情一起删除。
+	# ★★ 必须过 `_ellipsize()`：`draw_string()` 的 width **只影响对齐、不裁剪**
+	#   （本函数上面那条注释记着这个坑）。台词 10~20 字，而 text_w 只有 ~106px
+	#   ⇒ 不截断就会整条横穿到"执白 · 等待"上、再压到抽屉外。全文在 HUD 行（`_update_hud()`）。
+	# ⚠️ 这里是 `if` 而**不是** `elif`：它上面的表情分支删掉后就没有前驱条件了
+	#   （删那段时 `elif` 留着 ⇒ 2026-11-02 整份 game.gd 解析失败，"Expected statement, found elif"）。
+	#   §96：`--headless --editor --quit` 语法门**没抓到**这一条，只有实跑才报。
+	if slot == 1 and _taunt_left > 0.0 and _taunt_text != "":
+		sub_txt = _ellipsize(f, _taunt_text, text_w, 12)
+		sub_a = 0.95
 	node.draw_string(f, Vector2(text_x, r.size.y * 0.80), sub_txt,
 			align, text_w, 12, Color(ink.r, ink.g, ink.b, sub_a))
 
@@ -17854,86 +20164,21 @@ func _tick_net_identity(delta: float) -> void:
 		_redraw_identity()
 
 
-# ====== 快捷表情（2026-10-21）======
-## 表情格所在的那块面 = **抽屉底色**。
-## 抽屉面板的底、按钮的底、以及"画在按钮上的表情该用什么色"全都从这一个量出发。
-## ★★ 2026-10-21 目检抓到的真 bug：原来返回 `page_surface()`（宣纸主题下是暖米白），
-##   而按钮实际是**浅色**（`style_theme_button()` 在深色面板上给浅底深字）、表情却按
-##   深色面挑成了**近白**墨 ⇒ 白线压浅金底，量出来对比度 1.79（糊成一片）。
-##   ⇒ 参照面必须与"它实际画在哪"一致。
-func _emote_panel_surface() -> Color:
-	return _drawer_surface()
-
-
-## 一个表情格该用的墨色。
-## ★★ 直接读**按钮自己**的 `font_color`（`style_theme_button()` 刚按那块面算好的那个值），
-##   而不是再按"面"推一遍：按钮底色是调色板从面推出来的**第二层派生**，拿面去推墨会差一层
-##   亮度 —— 实测就是"白线压浅金底"。读按钮自己 = 与按钮文字**同一支笔**，差不了。
-func _emote_cell_ink(node: Control) -> Color:
-	var b: Node = node.get_parent() if node != null else null
-	if b is Button and (b as Button).has_theme_color_override("font_color"):
-		return (b as Button).get_theme_color("font_color")
-	return GameConfig.readable_ink_on(_drawer_surface())
-
-
-func _draw_emote_cell(node: Control, idx: int) -> void:
-	if node == null or not is_instance_valid(node):
-		return
-	_draw_ticks["emote_cell"] = int(_draw_ticks.get("emote_cell", 0)) + 1
-	var r := Rect2(Vector2.ZERO, node.size)
-	Emotes.draw_emote(node, idx, r.size * 0.5, minf(r.size.x, r.size.y) * 0.38,
-			_emote_cell_ink(node), GameConfig.accent_color())
-
-
-## 选定一个表情：本地先放 → 再发出去。
-## ★ 2026-10-21 起不再"选完关面板"：表情格一直在左抽屉里，没有面板可关。
-func _on_emote_pick(idx: int) -> void:
-	send_emote(idx)
-
-
-## 发一个表情（**自检也走这里**，别在自检里另写一份发送逻辑）。
-## 返回是否真的发出去了（节流挡掉 / idx 非法 ⇒ false）—— 自检据此判"节流生效"。
-func send_emote(idx: int) -> bool:
-	if not Emotes.is_valid(idx):
-		return false
-	var now := Time.get_ticks_msec()
-	if _emote_last_sent_ms > 0 and now - _emote_last_sent_ms < EMOTE_SEND_GAP_MS:
-		return false
-	_emote_last_sent_ms = now
-	# 本地先放（= `call_local` 语义）：自己的表情自己也该看见，不该等对端回声。
-	_play_emote(0, idx)
-	if game_mode == ONLINE and _chan != null and _chan.is_live():
-		_chan.send_message({"m": "emote", "e": idx})
-	return true
-
-
-## 让某个槽显示一个表情（slot 0=自己 / 1=对端）。
-## ★ 2026-10-22：表情现在**画在身份槽的头像圆里**，不再是一个飘在棋盘上的气泡面板
-##   （用户口令「表情包不要遮挡棋盘」）。这个函数因而只剩"记状态 + 让槽重画"。
-func _play_emote(slot: int, idx: int) -> void:
-	if slot < 0 or slot > 1 or not Emotes.is_valid(idx):
-		return
-	_emote_bubble_idx[slot] = idx
-	_emote_bubble_left[slot] = EMOTE_BUBBLE_LIFE
-	_redraw_identity()
-
-
-## 某槽表情的**淡出系数**（1 = 刚发出、0 = 已消失）。唯一派生点。
-## ★ 抽出来的理由（§111）：这个公式原来只写在 `_tick_emote_bubbles()` 里当 `modulate.a`，
-##   现在既要在绘制里用、又要在判据里读 —— 两处各写一遍迟早只改一处。
-## ⚠️ 判据**不许**读它当"画了多少"的证据（那是自己问自己，§70）；
-##   判据读探针 `_last_emote_alpha`（真画出去的那个数）。
-func emote_slot_alpha(slot: int) -> float:
-	if slot < 0 or slot > 1:
-		return 0.0
-	if _emote_bubble_left[slot] <= 0.0:
-		return 0.0
-	return clampf(_emote_bubble_left[slot] / EMOTE_BUBBLE_FADE, 0.0, 1.0)
-
+# ====== 头像圆几何（唯一真源）======
+## ⚰️ 2026-11-02 墓碑（名字不许回收）：本节原有整套快捷表情 —— `_emote_panel_surface()` /
+##   `_emote_cell_ink()` / `_draw_emote_cell()` / `_on_emote_pick()` / `send_emote()` /
+##   `_play_emote()` / `emote_slot_alpha()`。用户口令「聊天里的表情功能就放弃了」⇒ 全部删除，
+##   `emotes.gd` 同时删档（它是 8 个表情的唯一绘制真源，没有读者就只是个死文件）。
+## ★★ 一起删掉的还有一整套**用实测换来的知识**，将来真要恢复表情先读这四条：
+##   · 自绘图元 `antialias` 必须 false（开着约 20% 退出时 0xC0000005，§128）；
+##   · 自绘**绝不挂 Button 自己的 `draw` 信号**（实测 2/6 崩），要挂到子 `Control` 上；
+##   · 颜色必须读**按钮自己**的 `font_color`，按"面"再推一层会差一档亮度（白线压浅金底，1.79）；
+##   · 棋盘气泡是禁区（2026-10-22 用户口令「表情包不要遮挡棋盘」）。
+##   ⇒ 别因为"git 里还能翻到"就顺手恢复 —— 那条路要把上面四条重新走一遍。
 
 ## 头像圆在**槽内**的矩形（局部坐标）。绘制与判据共用的唯一几何真源。
-## ★ 2026-10-22 抽出来是为了让「表情画在哪」可以被判据直接量 ——
-##   以前头像位置只是 `_draw_identity_slot()` 里的一个局部变量，判据根本拿不到。
+## ★ 表情删掉之后本函数**仍有读者**：`avatar_screen_rect()` 与 `--idtest` ⑭ 用它判
+##   "头像圆不越出抽屉、也不碰棋盘"。所以它不随表情一起删。
 func _avatar_rect_in_slot(node_size: Vector2) -> Rect2:
 	var dia: float = minf(NET_ID_AVATAR_DIA, node_size.y - 10.0)
 	var c := Vector2(6.0 + dia * 0.5, node_size.y * 0.5)
@@ -17949,21 +20194,109 @@ func avatar_screen_rect(slot: int) -> Rect2:
 	return Rect2(n.global_position + r.position, r.size)
 
 
-## 表情生命周期。★ 与 `_tick_net_identity` 同理，必须在 `_process()` 的 early return 之前：
-## 动画表恒空时（静默对局）表情也得会淡出，否则它会一直挂在头像上。
-func _tick_emote_bubbles(delta: float) -> void:
-	var dirty := false
-	for slot in [0, 1]:
-		if _emote_bubble_left[slot] <= 0.0:
-			continue
-		_emote_bubble_left[slot] = maxf(_emote_bubble_left[slot] - delta, 0.0)
-		if _emote_bubble_left[slot] <= 0.0:
-			_emote_bubble_idx[slot] = -1
-		dirty = true
-	# ★ 只在真有表情在走时重绘：身份槽是自绘控件，没有"改了 modulate 就自己重画"那条路
-	#   （那是 Control 节点才有的便利，而承载表情的节点已经不在了）。
-	if dirty:
-		_redraw_identity()
+## ⚰️ 2026-11-02 墓碑（名字不许回收）：这里原有 `_tick_emote_bubbles()`（表情寿命推进，
+## 必须在 `_process()` 的 early return 之前）。表情删除后不再有寿命要推进，
+## `_process()` 里那次调用也一并删掉。
+
+
+# ====== AI 台词（2026-11-02）======
+## 懒加载台词池。**唯一**创建 `_taunt` 的点。
+## ★ 不在 `_ready()` 里建：`_ready()` 里有一长串自检会提前 return（`--rulestest` 等），
+##   那些自检不需要台词 —— 而"第一次真要说话"就是 `_maybe_taunt()`，那才是唯一的自然时机。
+func _taunt_ensure() -> Taunt:
+	if _taunt == null:
+		_taunt = Taunt.new()
+		if not _taunt.load_pool():
+			_taunt_err = _taunt.load_error
+			print("[taunt] 池子载入失败（本局不会说话）：%s" % _taunt_err)
+	return _taunt
+
+
+## 组装本手的局面快照（喂给 `Taunt.on_move()`）。`mover` = 刚落子那一方。
+## ★ 只抄**真源**（`an_*` / 提子桶 / `_hist`），绝不在这里另算一遍局势 ——
+##   两套局势算法迟早漂移，而漂移的那一天没有任何报错（§13 派生读真源）。
+## ★ `ai_diff` 用 `an_ai_diff`（**正 = AI 领先**，无界）。不要换回 `an_lead`：
+##   那个是黑方视角（正 = 黑领先），在 `AI_COLOR` 可换色之后拿它当"AI 领先"就是反的。
+func _taunt_ctx(mover: int) -> Dictionary:
+	return {
+		"ply": _hist.size(),
+		"ai_diff": an_ai_diff,
+		"ai_dead": an_dead_blocks,
+		"player_dead": an_player_dead_blocks,
+		"black_prisoners": black_prisoners,
+		"white_prisoners": white_prisoners,
+		# ★ 传**语义**（是不是 AI 落的）而不是颜色值：`enum Stone { EMPTY, BLACK, WHITE }`
+		#   ⇒ 黑=1 白=2。把数值抄进 `taunt.gd` 就是一份跨文件的隐式契约，
+		#   枚举顺序一变就静默失效（§113 按名字/按数值认东西的会静默坏掉）。
+		"mover_is_ai": mover == AI_COLOR,
+		"empties": _empty_tiles(),
+		"total_tiles": tiles.size(),
+	}
+
+
+## 落子后判断 AI 要不要说一句。**唯一**的说话入口（`place_stone()` 尾部调）。
+## ★ 只写状态不自己画：显示由 `_update_hud()`（全文）与 `_draw_identity_slot()`（截断版）读，
+##   与 `_play_emote()` 同一个结构 —— "说"和"画"分开，将来换显示位置改一处。
+func _maybe_taunt(mover: int) -> void:
+	if not taunt_enabled:
+		return
+	# 复盘态：盘面是"重放的过去"，AI 突然点评一句会与游标自相矛盾（同左抽屉在复盘态收起那条理由）。
+	if game_over or _replay != null:
+		return
+	# ★ 只有**人机档**才说话。写成白名单（`!= VS_AI`）而不是黑名单（排除 ONLINE / LOCAL）：
+	#   联机与本地双人在这条路上都**没有 AI**，一个不存在的对手开口是最容易被当成 bug 的观感问题；
+	#   将来加新模式时，白名单默认闭嘴，黑名单会默认让它说话。
+	if game_mode != VS_AI:
+		return
+	if tiles.is_empty():
+		return
+	var t := _taunt_ensure()
+	if not t.loaded:
+		return
+	var line := t.on_move(_taunt_ctx(mover))
+	if line == "":
+		return
+	_taunt_text = line
+	_taunt_left = maxf(t.life_sec, 0.1)
+	# ★ 主通道：进**聊天记录**（`_append_chat(1, …)`，即工程 2026-11-01 预留的那个口）。
+	#   左抽屉默认展开 ⇒ 玩家看到的是「疾风：开局我先占角吧。」这种带名字的记录，可回滚查看，
+	#   而不是一句 4 秒就没的浮字。
+	#   `_append_chat()` 内部会走 `_sanitize_chat()` 再截断到 `CHAT_MAX_LEN`，
+	#   台词池是本地文件也照样过它 —— 两道清洗里少走一道，将来换池子来源（玩家自制台词包）
+	#   就是一条现成的注入面。
+	_append_chat(1, line)
+	_update_hud()          # 折叠抽屉时的唯一提示（全文）
+	_redraw_identity()     # 就近提示（截断版）；`_refresh_net_extras()` 在抽屉没建好时会早退
+	print("[taunt] ", line)
+
+
+## 台词寿命推进。★ 到期才刷 UI（不是每帧）：台词是静态文本，中间态没有任何变化，
+## 每帧 `_update_hud()` 会把 `_refresh_invite_btn()` / `_update_clock_hud()` 一起拖着跑。
+func _tick_taunts(delta: float) -> void:
+	if _taunt_left <= 0.0:
+		return
+	_taunt_left = maxf(_taunt_left - delta, 0.0)
+	if _taunt_left > 0.0:
+		return
+	# ★ 文本与寿命**一起清**：只清寿命会在下一句到来前把上一句re-flash出来。
+	_taunt_text = ""
+	_update_hud()
+	_redraw_identity()
+
+
+## 新一局前收拾干净。**唯一**的复位点（`reset_game()` 调）。
+## ★ 不调它的后果：`Taunt._prev` 还留着上一局的快照 ⇒ 新局第一手算出的 delta 是跨局的
+##   虚假差值（上一局 AI 死了 3 块，这局开局第一手就报「我这条龙没了」）。
+func _taunt_reset() -> void:
+	_taunt_text = ""
+	_taunt_left = 0.0
+	# ★ 2026-11-03（打字停顿的连带面）：世代号 +1 让**还在等**的那句回话作废 ——
+	#   不这么做，重开一局后几秒会冒出上一局的"对手：…"（看起来很像是新局里 AI 说了句
+	#   莫名其妙的话）。`_ai_typing` 也要归零，否则新局身份槽一开场就写着"正在输入"。
+	_reply_seq += 1
+	_ai_typing = false
+	if _taunt != null:
+		_taunt.reset()
 
 
 ## ⚰️ 2026-10-22 墓碑（名字不许回收）：这一段原有四个函数
@@ -18354,6 +20687,10 @@ func _show_replay_hud(on: bool) -> void:
 			_refit_replay_hud()
 	if _hud_layer != null and is_instance_valid(_hud_layer):
 		_hud_layer.visible = not on
+	# ★ 2026-11-02：左抽屉是**独立一层**（`_drawer_layer`），`_hud_layer.visible` 管不到它。
+	#   它的可见性唯一派生点是 `_refresh_net_extras()`（口径 = 不在复盘态），必须在这里显式刷一次
+	#   —— 否则复盘时左抽屉留在屏上，而"复盘工具条 + 身份槽 + 表情 + 聊天"四样挤一起。
+	_refresh_net_extras()
 
 
 ## 把当前 `_replay` 的信号接到工具条。进复盘时调一次。
@@ -18588,7 +20925,6 @@ func _resign_game(loser: int, reason: String = "") -> void:
 		return
 	game_over = true
 	is_ai_thinking = false
-	_show_ai_hud(false)
 	_clear_count_prompt()
 	# ★ 联机战绩（2026-10-01）：认输方 loser 告负 ⇒ 我赢了 = loser 不是我。
 	#   只记联机（mode == ONLINE），人机/本地不计 —— 大厅胜率只反映"和真人打"的战绩。
@@ -18607,12 +20943,14 @@ func _resign_game(loser: int, reason: String = "") -> void:
 	if reason != "":
 		details.append(reason)
 	var scores: Dictionary = _compute_scores()
-	details.append("（认输时盘面参考）黑 %d / 白 %d" % [scores["total_black"], scores["total_white"]])
-	details.append("按 R 或点右下角「重新开始」再来一局")
+	details.append("盘面参考：黑 %d / 白 %d" % [scores["total_black"], scores["total_white"]])
+	# ★ 2026-11-02：删掉「按 R 或点右下角「重新开始」再来一局」—— 终局会自动拉开两侧抽屉，
+	#   「重新开始」就在右抽屉里，用不着在结算面板上再讲一遍操作步骤。
 	# ★ 棋谱终局条目（阶段①）。**认输也必须写**：这是复盘时最需要保留的一局
 	#   （"他是在这个局面认输的"），漏写的话谱停在最后一手、看不出是投降还是断线。
 	#   走 `_record_finish()` 这一个口（不自己拼 result 字典）。
 	_record_finish(GameRecord.REASON_RESIGN, scores)
+	_open_drawers_for_result()
 	_show_result_overlay(verdict, details)
 	_update_hud()
 	queue_redraw()
@@ -18630,13 +20968,16 @@ var _terr_mark: Dictionary = {}
 ## 棋盘「盘」的几何缓存：顶点凸包外扩后的多边形（换盘 / 改 pad 时重算，见 `_rebuild_board_panel()`）。
 var _panel_poly: PackedVector2Array = PackedVector2Array()
 var _panel_pad_cached: float = -1.0
+## 缓存键的圆润档位（−1 = 走普通凸包；≥1 = 走 `BoardPanel.shape_round()` 的轮数）。
+## ★ 只比 `pad` 是不够的：换盘型（帽子 ↔ 其它）与运行期改 `board_panel_round_iters`
+##   都不动 pad，不把这个键带上，盘边会一直用上一张盘缓存的形状（看起来"旋钮失灵"）。
+var _panel_round_cached: int = -2
 
 func _finish_game() -> void:
 	if game_over:
 		return
 	game_over = true
 	is_ai_thinking = false
-	_show_ai_hud(false)
 	_clear_count_prompt()
 
 	var scores: Dictionary = _compute_scores()
@@ -18662,11 +21003,12 @@ func _finish_game() -> void:
 		scores["stones_black"], scores["territory_black"], black_prisoners, total_b])
 	details.append("白方(AI)：盘面 %d + 领地 %d + 提子 %d + 贴目 %d = %d" % [
 		scores["stones_white"], scores["territory_white"], white_prisoners, komi, total_w])
-	details.append("按 R 或点右下角「重新开始」再来一局")
+	# ★ 2026-11-02：删掉「按 R 或点右下角「重新开始」再来一局」（同 `_resign_game()`）。
 	# ★ 棋谱终局条目（阶段①）。与 `_resign_game()` **共用** `_record_finish()`（铁律 8）：
 	#   两个终局路径的口径必须一致（winner 怎么判、比分怎么算、reason 怎么写），
 	#   各写一遍迟早会漂 —— 而漂了之后症状是"认输的谱没有 winner 字段"，复盘时才现形。
 	_record_finish(GameRecord.REASON_SCORE, scores)
+	_open_drawers_for_result()
 	_show_result_overlay(verdict, details)
 	_update_hud()
 	queue_redraw()
@@ -18742,12 +21084,8 @@ func _show_count_prompt(passer: int) -> void:
 	body.add_theme_font_size_override("font_size", 16)
 	body.add_theme_color_override("font_color", GameConfig.dialog_text_color())
 	vb.add_child(body)
-	var hint := Label.new()
-	hint.text = "选「继续下棋」则本局继续（空点下完会自动终局）"
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.add_theme_font_size_override("font_size", 13)
-	hint.add_theme_color_override("font_color", GameConfig.dialog_text_color())
-	vb.add_child(hint)
+	# ★ 2026-11-02：删掉原第三行「选「继续下棋」则本局继续（空点下完会自动终局）」——
+	#   两个按钮自己就叫「数子终局」/「继续下棋」，再解释一遍等于把按钮读给玩家听。
 	var hb := HBoxContainer.new()
 	hb.add_theme_constant_override("separation", 10)
 	vb.add_child(hb)
@@ -18792,8 +21130,136 @@ func _clear_count_prompt() -> void:
 		_count_layer.queue_free()
 		_count_layer = null
 
+# ====== 开局提示横幅 ======
+## 2026-11-02 用户口令「对局开始时太突然，需要一个开始的提示」。
+## 进对局场景时在棋盘**上方**浮一条「对局开始 · 谁先行」，淡入 → 停 → 淡出 → 自毁。
+##
+## ★ 三条独立旋钮：开关 / 淡入淡出时长 / 停留时长。位置单独一个比例旋钮。
+## ★ 为什么放在"上方比例"而不是正中央：正中央就是玩家第一个落子的地方，
+##   一条占地半屏的面板压在那里 1.6 秒，读起来像"挡住棋盘"而不是"提示"。
+@export var start_banner_enabled: bool = true
+@export var start_banner_fade: float = 0.28        # 淡入、淡出各自用时（秒）
+@export var start_banner_hold: float = 1.1         # 完全不透明的停留时长（秒）
+@export var start_banner_y_ratio: float = 0.14     # 面板顶边在视口高度中的比例（0=顶边）
+## 终局后自动拉开两侧抽屉（见 `_open_drawers_for_result()`）。
+@export var auto_open_drawers_on_end: bool = true
+var _start_banner_layer: CanvasLayer = null
+
+## 这一局该不该弹横幅。**联机不弹**：联机开局本来就有「双方准备」浮层那一道仪式，
+## 再叠一条横幅只会和准备面板抢注意力。
+## 自检/仪器不弹：否则每条自检都多一层浮层，而"截图里有没有它"又会变成新的隐性依赖。
+func _start_banner_allowed() -> bool:
+	if not start_banner_enabled:
+		return false
+	if game_mode == ONLINE:
+		return false
+	if _replay != null:
+		return false
+	# 目检档（`--screenshot --shotstart`）：`--screenshot` 本身被 `is_automated_run()` 判成
+	# 自动化运行 ⇒ 不加这条白名单就**永远拍不到**横幅。而"位置对不对、有没有压盘"只有看图能判（§11）。
+	if "--shotstart" in _argv():
+		return true
+	return not GameConfig.is_automated_run()
+
+## 副标题 = "谁先行"。玩家执黑（`PLAYER_COLOR`）是人机档的常态，AI 先行只是兜底路径，
+## 但两种都要说出来 —— 不然玩家看见盘上多了一颗子会以为是自己点错了。
+## ★ 2026-11-02：删掉「点击棋盘落子 / 请稍候」这类操作说明 —— 横幅是"告诉你是谁先行"，
+##   怎么落子玩家看一眼棋盘就知道。
+func _start_banner_subtitle() -> String:
+	var who := "黑方" if current_player == Stone.BLACK else "白方"
+	if game_mode == VS_AI:
+		if current_player == PLAYER_COLOR:
+			return "%s先行（你）" % who
+		return "%s先行（AI）" % who
+	return "%s先行" % who
+
+func _show_start_banner() -> void:
+	if not _start_banner_allowed():
+		return
+	_clear_start_banner()
+	_start_banner_layer = GameConfig.new_themed_layer()
+	_start_banner_layer.name = "StartBanner"
+	_start_banner_layer.layer = 30      # HUD 20/25 之上、数子提示/结算面板 40 之下
+	add_child(_start_banner_layer)
+	var panel := PanelContainer.new()
+	panel.name = "StartBannerPanel"
+	# 不吃点击：横幅只是提示，这一段里玩家点棋盘照样要能落子
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	GameConfig.style_dialog_panel(panel)
+	_start_banner_layer.add_child(panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 2)
+	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(vb)
+	var title := Label.new()
+	title.text = "对局开始"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", GameConfig.dialog_title_color())
+	vb.add_child(title)
+	var sub := Label.new()
+	sub.text = _start_banner_subtitle()
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.add_theme_font_size_override("font_size", 15)
+	sub.add_theme_color_override("font_color", GameConfig.dialog_text_color())
+	vb.add_child(sub)
+	# 位置：等一帧拿到**实际**尺寸再按视口定位（CanvasLayer 子控件拿不到视口矩形当父区域，
+	# anchors 会定位到左上角之外 —— 与 `_center_popup()` 同一个坑）。
+	_start_banner_place.call_deferred(panel)
+	# 淡入 → 停留 → 淡出 → 自毁。淡的是面板（CanvasLayer 没有 modulate 属性）。
+	# ★ 目检档把停留拉到 5s：`_capture_and_quit()` 要等 2.0s 才截，默认 1.1s 的横幅那时已淡完。
+	var hold: float = 5.0 if "--shotstart" in _argv() else start_banner_hold
+	panel.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(panel, "modulate:a", 1.0, start_banner_fade)
+	tw.tween_interval(hold)
+	tw.tween_property(panel, "modulate:a", 0.0, start_banner_fade)
+	tw.tween_callback(_clear_start_banner)
+
+func _start_banner_place(panel: Control) -> void:
+	await get_tree().process_frame
+	if not is_instance_valid(panel):
+		return
+	var vs := get_viewport_rect().size
+	panel.position = Vector2((vs.x - panel.size.x) * 0.5,
+			clampf(vs.y * start_banner_y_ratio, 0.0, maxf(vs.y - panel.size.y, 0.0)))
+
+func _clear_start_banner() -> void:
+	if _start_banner_layer != null and is_instance_valid(_start_banner_layer):
+		_start_banner_layer.queue_free()
+	_start_banner_layer = null
+
+## AI 起手推迟到横幅淡出前（玩家先看清"谁先行"）。
+## ★ 用**独立协程**而不是在 `_ready()` 里 `await`：`_ready()` 后半段还有全部自检分派，
+##   在里面 await 会把它们一起挂起（铁律 §96：exit=0 不等于跑到了）。
+func _start_ai_turn_after_banner(delay: float) -> void:
+	await get_tree().create_timer(maxf(delay, 0.0)).timeout
+	if not is_inside_tree() or game_over or _replay != null:
+		return
+	_start_ai_turn()
+
 # ====== 结算结果面板 ======
 var _result_layer: CanvasLayer = null
+
+## 终局后两侧抽屉**自动拉开**（2026-11-02 用户口令「对局结束时拉开两侧折叠菜单」）。
+## 理由：结算面板只报比分，而「重新开始 / 返回菜单」这些**下一步操作**全在右抽屉里；
+## 折叠状态下玩家得先自己去找那条把手。
+## ★ 只写"用户意图"两个布尔，摆位交给 `_refit_hud()`（与 `_set_drawer_open()` 同一口径，铁律 8）。
+## ★ 棋盘不会跟着动：`_drawer_band()` 与开合脱钩（见那里的长注释）。
+func _open_drawers_for_result() -> void:
+	if not auto_open_drawers_on_end:
+		return
+	# ★ 2026-11-07：结算期间钉住两侧（玩家正要点的「重新开始」就在右抽屉里）。
+	#   顺带清气泡与 latch：结算面板压在中间，聊天气泡不该再浮着抢注意力。
+	#   ⚠️ 清理必须放在"已展开就早退"**之前**，否则默认拉开的局一次都清不到。
+	_drawer_hover_lock = true
+	_drawer_reopen_latch = [false, false]
+	_dismiss_chat_bubble()
+	if _drawer_left_open and _drawer_right_open:
+		return
+	_drawer_left_open = true
+	_drawer_right_open = true
+	_refit_hud()
 
 func _show_result_overlay(verdict: String, details: PackedStringArray) -> void:
 	_clear_result_overlay()
@@ -18826,6 +21292,8 @@ func _clear_result_overlay() -> void:
 	if _result_layer:
 		_result_layer.queue_free()
 		_result_layer = null
+	# 结算面板退场 ⇒ 侧边悬停自动开合恢复（不锁在"永远展开"那一档）。
+	_drawer_hover_lock = false
 
 # ====== 返回菜单 ======
 ## 对局中点击“返回菜单”：切回独立的菜单场景（本场对局状态随场景释放，下次进入重新开始）
@@ -18837,6 +21305,9 @@ func _on_return_to_menu_pressed() -> void:
 	#   但它从不建通道（单进程自环）；直接调 `_chan.close_relay()` 会空指针崩溃。
 	if GameConfig.online and _chan != null:
 		_chan.close_relay()
+	# ★ 语音要显式收摊（2026-11-01）：采集 bus 与麦克风 player 是**引擎级**资源，
+	#   不随场景释放 ⇒ 不收的话回菜单后还在录，玩家完全看不到、也没有任何报错。
+	_shutdown_voice()
 	_clear_ready_overlay()
 	Transition.change_scene("res://menu.tscn")
 
@@ -18890,7 +21361,11 @@ func _show_pause_menu() -> void:
 	vb.add_child(title)
 	var hint := Label.new()
 	hint.name = "DialogHint"
-	hint.text = "对局尚未结束，再按 ESC 或点「继续对局」回到棋盘"
+	# ★ 2026-11-02：原为「对局尚未结束，再按 ESC 或点「继续对局」回到棋盘」—— 标题「暂停」
+	#   与按钮「继续对局」已经把这件事说完，这行是纯重复。
+	#   节点**必须保留**：`GameConfig.probe_dialog_contrast()` 靠 DialogPanel/DialogTitle/
+	#   DialogHint 三件判"正文色对面板底达标"，删节点会让 `--esctest` 报"面板结构不完整"。
+	hint.text = ""
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_size_override("font_size", 15)
 	# 同理不能用 ink_color()：浅色主题下它是近黑 (0.10,0.10,0.12)，对面板底对比度实测 **1.06**
@@ -18961,6 +21436,7 @@ func _quit_game_from_menu() -> void:
 	# 同上：判空不可省（`--onlinetest` 自检没有通道）
 	if GameConfig.online and _chan != null:
 		_chan.close_relay()
+	_shutdown_voice()
 	get_tree().quit()
 
 # ====== 输入 ======
@@ -18975,6 +21451,21 @@ func _input(event: InputEvent):
 		_update_hover(event.position)
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
+		# ★★ 焦点闸（2026-11-01，文字聊天带来）：聊天输入框持有焦点时，**除 ESC 外的按键
+		#   一律不归本函数管**，交给 `LineEdit` 自己。
+		#   不加这道闸的后果正是当初"文字聊天不在本批"的唯一理由：打字时按到 `r` 就把棋盘清了、
+		#   按到 ESC 就弹暂停面板，而这两件事**都不报错**（看起来只是"打个字怎么盘没了"）。
+		#   ⚠️ 这里**只分流、不 `set_input_as_handled()`**（ESC 除外）：GUI 输入在 `_input`
+		#      之后才派发，一旦标成"已处理"，`LineEdit` 就收不到字符了 ——
+		#      症状是"输入框能聚焦、能看见光标，但一个字都打不进去"。
+		_input_gate = ""
+		if _chat_has_focus():
+			if event.keycode == KEY_ESCAPE:
+				_chat_edit.release_focus()
+				get_viewport().set_input_as_handled()
+			_input_gate = "chat"
+			return
+		_input_gate = "key"
 		# ★★ 复盘态的键位**必须排在下面那串对局快捷键之前**：否则 `R`（重开）在复盘里
 		#   会把盘清空、`ESC` 会弹出暂停面板 —— 两者都不报错，只是"复盘里按 R 就乱"。
 		# ★ 走 `_rp_step/_rp_jump/_rp_on_play` 这几个**与按钮同一个**入口，不自己碰
@@ -19024,7 +21515,16 @@ func _process(delta: float) -> void:
 	#   之前**：静默对局里 `_place_anims` / `_capture_anims` 恒空，摆在后面就成了
 	#   "头像永远取不回来、气泡永远不消失"——而且完全静默（与上面棋钟那条同一个病）。
 	_tick_net_identity(delta)
-	_tick_emote_bubbles(delta)
+	# ★ AI 台词寿命（2026-11-02）必须在下一句 early return 之前：
+	#   静默对局里动画表恒空 ⇒ 放在后面的话台词永远不消失（同棋钟那条一个病）。
+	_tick_taunts(delta)
+	# ★ 聊天跟随 / 发送冷却必须在下一句 early return 之前：静默对局里动画表恒空，
+	#   放后面 ⇒ 冷却永远不恢复（发送入口一直锁着）、回看后永远拉不回最新（同棋钟那条病）。
+	_tick_chat(delta)
+	_tick_chat_bubble(delta)
+	# ★★ 抽屉悬停 + 拉出/推入动画：必须也在 early return 之前（静默对局里
+	#   `_place_anims` 恒空 ⇒ 放后面就是"抽屉永远不动"，与棋钟同族）。
+	_tick_drawers(delta)
 	# ★★ 复盘推进必须在下一行那个「没有动画就早退」**之前**：复盘态下动画表恒为空
 	#   （离位动画被 `replay_anim_enabled` 关掉了）⇒ 放到后面的话连续播放会被这行
 	#   **整段吃掉**，症状是"按了播放但一动不动"，且没有任何报错。
@@ -19074,9 +21574,101 @@ func _process(delta: float) -> void:
 ## ★ 几何与画法都在 `board_panel.gd::BoardPanel` 里（设置页预览共用同一份），
 ##   本函数只负责"什么时候算"：调用它的是 `_compute_tile_metrics()` 末尾，
 ##   那时顶点已换算成像素坐标 ⇒ 盘与 `tile_centers` **同生命周期**。
+## 盘边要走的形状档位（**全盘型同一套**，2026-11-08 用户口令「推广到全部棋盘」）：
+##   −1 = 顶点凸包（旧行为）
+##   ≥1 = 凸包外扩后 Chaikin 平滑（轮数）
+##   ≥100 = 贴合棋盘真实外轮廓（凹口保留）
+func _panel_round_key() -> int:
+	if board_panel_fit_outline:
+		return 100
+	return board_panel_round_iters if board_panel_round_hull else -1
+
+
+## 棋盘外轮廓环（沿**真实瓦片边界**走，不是凸包）：返回顶点坐标的闭合环。
+##
+## ★ 数据源 = `_edge_neighbor` 里值为 −1 的那些边（盘的外边界边）：瓦片边要么有邻居、
+##   要么就是外边界，天然首尾相接成环 —— 不需要任何几何布尔运算。
+## ★ 可能有多环（削峰留下的洞若没「均分」就会有内环）⇒ 只取**面积最大**的那一圈。
+## ★ 任何一步走不通都返回空数组，调用方退回凸包（宁可画成旧样子，也不能画一个破环）。
+func _board_boundary_ring() -> PackedVector2Array:
+	if vertices.is_empty() or _edge_neighbor.is_empty():
+		return PackedVector2Array()
+	var link: Dictionary = {}
+	for k in _edge_neighbor.keys():
+		if int(_edge_neighbor[k]) >= 0:
+			continue
+		var kk: int = int(k)
+		var a: int = kk / 1000000
+		var b: int = kk % 1000000
+		if a < 0 or b < 0 or a >= vertices.size() or b >= vertices.size():
+			continue
+		if not link.has(a):
+			link[a] = []
+		if not link.has(b):
+			link[b] = []
+		(link[a] as Array).append(b)
+		(link[b] as Array).append(a)
+	if link.is_empty():
+		return PackedVector2Array()
+	var best := PackedVector2Array()
+	var best_area := -1.0
+	var used: Dictionary = {}
+	for v0 in link.keys():
+		var s: int = int(v0)
+		if used.has(s):
+			continue
+		var ring: Array[int] = [s]
+		used[s] = true
+		var prev := -1
+		var cur := s
+		var closed := false
+		while true:
+			var nxt := -1
+			for nb in link[cur]:
+				var u: int = int(nb)
+				if u != prev:
+					nxt = u
+					break
+			if nxt < 0 or nxt == s:
+				closed = nxt == s
+				break
+			ring.append(nxt)
+			used[nxt] = true
+			prev = cur
+			cur = nxt
+			if ring.size() > link.size() + 2:
+				break
+		if not closed or ring.size() < 3:
+			continue
+		var pts := PackedVector2Array()
+		var area := 0.0
+		for i in ring.size():
+			pts.push_back(vertices[ring[i]])
+		for i in pts.size():
+			area += pts[i].cross(pts[(i + 1) % pts.size()])
+		area = absf(area) * 0.5
+		if area > best_area:
+			best_area = area
+			best = pts
+	return best
+
+
 func _rebuild_board_panel() -> void:
 	_panel_pad_cached = board_panel_pad
-	_panel_poly = BoardPanel.shape(PackedVector2Array(vertices), board_panel_pad)
+	_panel_round_cached = _panel_round_key()
+	var pts := PackedVector2Array(vertices)
+	if _panel_round_cached >= 100:
+		# 全盘型：盘边贴合棋盘真实外轮廓（凹口保留，不填平）
+		var ring: PackedVector2Array = _board_boundary_ring()
+		if ring.size() >= 3:
+			_panel_poly = BoardPanel.shape_from_ring(ring, board_panel_pad, board_panel_round_iters)
+		else:
+			_panel_poly = BoardPanel.shape(pts, board_panel_pad)
+	elif _panel_round_cached >= 1:
+		# 退出贴合档时的对照档：凸包 → 外扩 → Chaikin 平滑
+		_panel_poly = BoardPanel.shape_round(pts, board_panel_pad, _panel_round_cached)
+	else:
+		_panel_poly = BoardPanel.shape(pts, board_panel_pad)
 
 
 ## 画棋盘「盘」—— 一块**托住棋盘的实体板**（面模式与图模式共用这一个函数，
@@ -19090,8 +21682,8 @@ func _rebuild_board_panel() -> void:
 func _draw_board_panel() -> void:
 	if not board_panel_enabled:
 		return
-	if not is_equal_approx(_panel_pad_cached, board_panel_pad):
-		_rebuild_board_panel()          # 运行期改 pad 立刻生效（`@export` 是旋钮，不能只在启动时读一次）
+	if not is_equal_approx(_panel_pad_cached, board_panel_pad) or _panel_round_cached != _panel_round_key():
+		_rebuild_board_panel()          # 运行期改 pad / 圆润档 / 换盘型 立刻生效（`@export` 是旋钮，不能只在启动时读一次）
 	if _panel_poly.size() < 3:
 		return
 	var edge: Color = line_color
@@ -19117,6 +21709,56 @@ func _draw():
 	# 绘制瓷砖（纯色平涂：全盘统一低调底色，结构由边线表达）
 	for i in range(tiles.size()):
 		draw_colored_polygon(_tile_points_for_draw(i), board_tile_color)
+
+	# ---- 削峰凹坑（爱因斯坦盘专属，纯视觉层）----
+	# ★ 这些格位不在 `tiles` / `adjacency` / `board` 里（生成时就没收进选区）⇒ 不可落子、
+	#   不参与提子与数子、`_tile_at_point()` 对它们返回 −1（点上去没有任何反应）。
+	#   `_hat_peak_holes` 只被本段读，别处一律不认。
+	# ★ 坑与邻居**共边**，所以坑的顶点早就被邻居瓦片登记过 → 直接复用 `vertices` 的索引即可。
+	# ★ 必须挂 `_is_hat` 闸：别的棋盘生成器各清各的数组，`_hat_peak_holes` 只有 `_hat_clear()` 清 ——
+	#   从帽子盘切到彭罗斯/雪花时它不会被清，光靠「数组非空」会把旧坑画到新盘上。
+	#
+	# ★★ 为什么最后选「规则圆孔」而不是「按瓦片形状平涂」（2026-11-04 目检结论，别回退）：
+	#   坑的形状就是帽子瓦片本身 —— 不规则、尖角多、细腰。**任何**按这个形状铺色的做法
+	#   （深色 / 淡色 / 镂空 / 分层渐变）在浅棕盘上都读成「棋盘被虫蛀了几个洞 / 渲染 bug」，
+	#   因为不规则色块的边界太碎，眼睛把它归到噪声而不是结构。
+	#   规整的圆是这张盘上**唯一**的圆形元素（面模式棋子是整块瓦片染色）⇒ 一眼读作「孔/标记」，
+	#   既交代了「这里不能下」，又因为形状规整不会弄脏盘面肌理。
+	var hole_dot_r: float = _min_tile_r * hat_peak_hole_dot if _min_tile_r > 0.0 else 0.0
+	for hpoly in _hat_peak_holes:
+		if not _is_hat:
+			break
+		var hids: Array = hpoly
+		if hids.size() < 3:
+			continue
+		var hpts := PackedVector2Array()
+		var hc := Vector2.ZERO
+		for hvi in hids:
+			var hi: int = int(hvi)
+			if hi >= 0 and hi < vertices.size():
+				hpts.push_back(vertices[hi])
+				hc += vertices[hi]
+		if hpts.size() < 3:
+			continue
+		hc /= float(hpts.size())
+		match hat_peak_hole_style:
+			1:                                   # 平涂：整块瓦片压暗（旧做法，留着做对照）
+				draw_colored_polygon(hpts, board_tile_color.darkened(hat_peak_hole_dim))
+			2:                                   # 漏斗：按顶点向形心收缩，逐层叠出「越深越暗」
+				for li in maxi(hat_peak_hole_layers, 1):
+					var k: float = float(li + 1) / float(maxi(hat_peak_hole_layers, 1))
+					var shrink: float = hat_peak_hole_shrink * k
+					var lpts := PackedVector2Array()
+					for lp in hpts:
+						lpts.push_back(hc + (lp - hc) * (1.0 - shrink))
+					draw_colored_polygon(lpts, board_tile_color.darkened(hat_peak_hole_dim * (0.5 + k)))
+			3:                                   # 圆孔（默认）：坑心一个规则圆
+				if hole_dot_r > 1.0:
+					draw_circle(hc, hole_dot_r, board_tile_color.darkened(hat_peak_hole_dim))
+			4:                                   # 镂空：填背景色 = 透过盘面看见桌面
+				draw_colored_polygon(hpts, background_color)
+			_:                                   # 0 = 不画（坑完全隐形）
+				pass
 
 	# 把瓷砖本身作为棋子：占格瓷砖染成玩家色（沿用釉面质感，与盘面瓷砖统一观感）；
 	# 落子为棋子色从透明渐显，提子为棋子色渐隐回瓷砖本色——替代原来的圆形棋子。
@@ -19582,15 +22224,21 @@ func _setup_shot_capture() -> void:
 ## 不是本值本身 —— 龙拐弯时"离落点"的图距离会比格数短）。
 const SHOT_WAVE_LEN: int = 8
 
-## --screenshot --shotemote：**两条侧抽屉 + 两个头像上的表情**（2026-10-21，10-22 改版）。
-## ★ 这一档**只为一件事存在**：自绘图形（脸 / 心 / 星）的好坏没有任何断言能抓 ——
-##   线宽在 52px 格子里糊不糊、心形缩放后是不是被压扁、"淡底的脸"会不会和底板混成一片，
-##   全是"看着不对但全部判据都绿"。⇒ 必须真窗口截一张，用眼睛看。
-## ★ 为什么把寿命直接推到 999 秒而不是加一个"截图保持"开关：
-##   `_tick_emote_bubbles()` 是生产逻辑，为截图加一条 `if _shot_hold: return` 就等于
-##   在生产路径里插一个**只有截图会走到的分支**（那类分支没人测，改坏了也不知道）。
-##   把寿命设大是纯数据操作，走的还是同一条 tick（alpha 恒 1.0，因为 999/0.45 > 1）。
-func _setup_shot_emote() -> void:
+## ⚰️ 2026-11-02 墓碑（名字不许回收）：这里原有 `_setup_shot_emote()`（`--screenshot --shotemote`
+##   那一档目检：截两条抽屉 + 两个头像上的表情，专看"自绘图形糊不糊"）。
+##   表情整套删除后它没有可拍的对象，整档删除（`_ready()` 里的分派同时删掉）。
+## ★ 别因为"目检档删了就少一层保障"而想恢复：这一档守的是**自绘图形**的观感问题，
+##   而自绘图形现在只剩身份槽的头像圆环（一条 `draw_arc`，由 `--idtest` ⑭ 量几何）。
+##   剩下那些原生控件（Button / LineEdit / Label）的外观由 `--shotchat` 那张图看，
+##   以及 `--menutest` ⑯ 的明度扫描兜着。
+
+## --screenshot --shotchat：左抽屉同时摆出身份槽 / 聊天记录 / 常用短语 / 输入行（2026-11-01）。
+## ★ 这是文字聊天的**目检**入口。判据量的是矩形与字符串，量不到"挤不挤、看不看得清"：
+##   输入行只有 172px 宽，要装 LineEdit + 两个 30px 按钮 ⇒ 余下的输入区是否够打三四个字、
+##   聊天行的 12px 字在抽屉底上是否还清楚、气泡式记录区有没有把表情格顶掉 —— 都得看图。
+## ★ 走真实函数（`_append_chat()` / `_refresh_net_extras()`），不手工拼 Label：
+##   手工拼出来的图和真机不一致，等于看了一张不存在的界面。
+func _setup_shot_chat() -> void:
 	game_mode = ONLINE
 	_net_color = Stone.BLACK
 	_net_connected = true
@@ -19598,21 +22246,47 @@ func _setup_shot_emote() -> void:
 	_ready_set = {Stone.BLACK: true}
 	if _drawer_layer == null or not is_instance_valid(_drawer_layer):
 		_build_drawers()
+	# ★ 必须挂一个假通道：`can_chat()` 要求真有通道，没有的话输入行会锁成
+	#   "单机局没有聊天" —— 拍不到真正的可输入外观，等于看了一张不存在的界面。
+	#   用 `_ChatProbeChan`（自检里那个内联假通道）而不是直接 `editable = true`：
+	#   后者绕过了可用性真源，拍出来的图与真机又不是一个东西。
+	var probe := _ChatProbeChan.new()
+	add_child(probe)
+	_chan = probe
 	_refresh_net_extras()
 	_refit_drawers()
-	# 自己 → 比心（多边形填充那条分支）；对端 → 大笑（弧 + 填充半圆那条分支）
-	_play_emote(0, 6)
-	_play_emote(1, 1)
-	_emote_bubble_left[0] = 999.0
-	_emote_bubble_left[1] = 999.0
+	# ⚰️ 2026-11-02：这里原有两行 `_play_emote()`（把自己/对端头像切成表情，顺带证明
+	#   "表情与聊天区并存不打架"）。表情删除后没有东西可摆，两张头像回到真实外观。
 	_redraw_identity()
-	# ★ 2026-10-22：这张图现在同时拍到三样东西 —— 左抽屉（两个头像：上面对端"大笑"、
-	#   下面自己"比心"）、8 个表情格、右抽屉按键列，而**棋盘上一个遮挡物都没有**。
-	#   "表情有没有压到盘上"一眼可判（这正是 `--drawertest` / `--emotetest` 的判据管不到
-	#   的部分：判据只量矩形与计数，看不出"看着挤不挤"）。
-	print("[shotemote] 身份条 自己=%s 对端=%s｜头像上表情 idx=(%d,%d)｜表情格 %d 格｜抽屉带宽 %s" % [
-		_display_name_for(0), _display_name_for(1),
-		_emote_bubble_idx[0], _emote_bubble_idx[1], Emotes.count(), str(drawer_bands())])
+	_chat_lines.clear()
+	_append_chat(1, "这盘开局你走星位？")
+	_append_chat(0, "嗯，试试看能不能活")
+	_append_chat(1, "右下那块我认输了，长考一下")
+	_append_chat(0, "好，等下我停一手")
+	_chat_lines.append("你：" + "很长的一条用来量换行和滚动".repeat(4))
+	while _chat_lines.size() > CHAT_LOG_MAX:
+		_chat_lines.pop_front()
+	_rebuild_chat_log()
+	# ★ 禁言态必须在记录重建**之后**才摆：否则 `_rebuild_chat_log()` 会把这段聊天记录
+	#   换成「⊘ 禁言中」标记，这张图就拍不到要目检的历史对话了（此处只为拍按钮按下态）。
+	_block_remote = true
+	if _chat_edit != null and is_instance_valid(_chat_edit):
+		_chat_edit.text = "回车发送"
+	# ★★ 摆成「对端槽悬停 + 三个开关都按下」再拍（2026-11-04 改）：
+	#   两个小开关**只在悬停时出现**，不摆悬停态就等于拍不到它们 —— 而那正是这次要目检的东西。
+	#   ⚠️ 不调 `start_tx()`：截图进程不需要真开麦，headless 下它也开不起来
+	#      ⇒ 那会让这张图与"真机开麦态"又不一致。
+	_mute_remote = true
+	_voice_on = true
+	_mute_btn.set_pressed_no_signal(true)
+	_block_btn.set_pressed_no_signal(true)
+	_voice_btn.set_pressed_no_signal(true)
+	# `_on_peer_hover(true)` 走真实路径（含矩形复核）：传 inside=true 时结果一定是真。
+	_on_peer_hover(true)
+	_refresh_chat_ui()
+	print("[shotchat] 聊天区 条目=%d｜输入行可用=%s｜内容最小尺寸=%s｜内容区=%s" % [
+		_chat_lines.size(), str(_chat_edit != null and _chat_edit.editable),
+		str(_drawer_left_body.get_combined_minimum_size()), str(drawer_content_rect(0).size)])
 
 
 ## --screenshot --shotwave：造一条**长龙**，一手提掉它，然后冻在"波前"途中。
@@ -20708,9 +23382,37 @@ var _init_applied: bool = false          # 已**应用**过对端下发的初始
 #     ⇒ 拿它当"初始盘面经 P2P 回环送达"的判据 = **恒真式**（等于没测那件事）。
 #     教训同本工程那一条：**判据必须读真源；读一个"顺带也会变真"的量 = 没测**。
 var _steam_peer_override: int = 0        # 自检用：强制 Steam 对端（同账号自环，见 SteamTransport.start）
-var _net_phase: String = "playing"        # ONLINE 专用：双方准备阶段 ready / 已开始 playing
+## ONLINE 专用阶段机：`ready`（等双方点准备）→ `picking`（**双方各选一张棋盘**）→ `playing`。
+## ★ 2026-11-03 新增 `picking` 这一档（用户口令「先确认两个人之后，每个人各选一张图，
+##   然后在两张图里面随机选取一个开始对局」）。旧版只有 ready/playing 两档，
+##   "双方都准备"直接跳到 playing ⇒ 用哪张盘完全由房主在菜单里的选择决定。
+var _net_phase: String = "playing"
 var _ready_set: Dictionary = {}           # 房主侧记录谁已准备：{color: true}
+## 选盘阶段：`{颜色: 棋盘 id}`（两端都记 —— 房主权威、加入方收到回放后同样能显示"对方选了啥"）。
+var _board_pick: Dictionary = {}
+## 房主选定的**格数档**（0 小 / 1 中 / 2 大）。阶段 `sizing` 里由房主单选、广播后两端都记，
+## `_apply_net_board()` 只读这一份决定盘面大小。
+## ★ 默认 **1（中）而不是 -1**：`_apply_size_tier()` 会把越界值 `clampi` 到 0，
+##   而 0 = **最小**盘 —— 万一某条路径漏了选档，给一盘 72 格的棋比给 200 格糟得多。
+var _sized_tier: int = 1
+## 格数档覆盖层（阶段 `sizing`）。三个成员同生命周期，与选盘那三个一条纪律。
+var _size_layer: CanvasLayer = null
+var _size_hint: Label = null
+var _size_btns: Array[Button] = []
+## `board_pick` 的「随机」哨兵：玩家点「随机」表示**让房主代抽一张**（2026-11-03 用户口令
+## 「再加一个可以选的随机棋盘」）。
+## ★ 为什么是 -2 而不是 -1：`-1` 在本协议里已经有既有语义 = **非法 / 未选**
+##   （`--readygate` ⑪ 就是拿 -1 当"脏包"喂进去的）。两件事共用一个值 ⇒ 判据会互相污染。
+## ★ 哨兵**只在传输途中存在**：房主在广播之前就把它换成具体 id（见 `_normalize_net_action()`），
+##   `_board_pick` 里存下来的永远是具体盘 id。
+const NET_PICK_RANDOM: int = -2
+## 抽中的棋盘 id（-1 = 还没抽）。房主抽签后经 `start` 动作下发，两端都记这一份。
+var _net_board_chosen: int = -1
 var _ready_layer: CanvasLayer = null      # 「准备」按钮覆盖层
+## 选盘覆盖层（阶段 `picking`）。三个成员同生命周期：建时赋值、清时置空。
+var _pick_layer: CanvasLayer = null
+var _pick_hint: Label = null
+var _pick_btns: Array[Button] = []
 ## 「准备」按钮。★ 2026-10-15 加：它必须**存成员** —— 刷新函数原先靠
 ## `get_node_or_null("ReadyBtn")` 找它，而那是相对路径（只查直接子节点），按钮在
 ## `PanelContainer/VBoxContainer/` 底下 ⇒ 恒 null ⇒ "已准备"那一档永远刷不出来。
@@ -20775,6 +23477,10 @@ func _start_network() -> bool:
 	_net_color = _host_color_from_seat() if _is_host else Stone.WHITE
 	_net_phase = "playing"      # 连接成功后若非自检会切到 ready
 	_ready_set = {}
+	# 选盘状态每局清空（铁律 8：清空点也是写点 —— 残留上一局的选盘会让"双方都选完了"假成立）
+	_board_pick = {}
+	_net_board_chosen = -1
+	_sized_tier = 1
 	# ★ 2026-09-30 §24 第 5 步删掉了这里的 5 行：`Matchmaking.server_url = …` 与四条
 	#   `NetworkManager.*.connect(…)`（peer_joined / peer_left / connected_to_host /
 	#   disconnected_from_host）—— 前者属于自建信令服，后者属于 ENet 直连，双双下线。
@@ -20822,6 +23528,8 @@ func _start_network() -> bool:
 		st.message_received.connect(_on_relay_message)
 		st.relay_failed.connect(_on_relay_failed)
 		st.lobby_ready.connect(_on_steam_lobby_ready)
+		# ★ 语音入站（2026-11-01）：只连**基类**那条信号 —— 将来再加通道时这一段零改动。
+		st.voice_received.connect(_on_voice_packet_in)
 		err = st.start(int(sa["lobby"]), str(sa["role"]), int(sa["peer"]))
 		if err != OK:
 			st.queue_free()
@@ -21060,8 +23768,11 @@ func _net_send_action(action: Dictionary) -> void:
 		return
 	# 房主本地即权威 → 应用 + 发给对端；加入方发给房主等待回放
 	if _is_host:
-		_apply_action(action)
-		_chan.send_message({"m": "apply", "action": action})
+		# ★ 2026-11-03：**先归一化再应用/广播** —— 「随机」哨兵只在这里变成具体盘 id，
+		#   广播出去的也是那一份（否则加入方会自己再掷一次，见 `_normalize_net_action()`）。
+		var a: Dictionary = _normalize_net_action(action)
+		_apply_action(a)
+		_chan.send_message({"m": "apply", "action": a})
 	else:
 		_net_awaiting = true
 		_chan.send_message({"m": "request", "action": action})
@@ -21098,21 +23809,26 @@ func _on_relay_message(msg: Dictionary) -> void:
 			_on_undo_req_received(asker)
 		"undo_res":
 			_on_undo_res_received(bool(msg.get("ok", false)), int(msg.get("target_color", -1)))
-		"emote":
-			# ── 快捷表情（2026-10-21）──
-			# ★ 刻意**不进** `_apply_action` / `_validate_action`：那套是"房主权威 → 直接执行"，
-			#   而表情不改变任何棋盘状态、也不需要房主仲裁（与 `undo_req`/`undo_res` 同一个定位：
-			#   塞进 action 里就得给回合校验加豁免，"该谁走"那层会多一个例外口子）。
-			# ★ "idx 是否合法"**不在这里另写一份**：唯一守卫在 `_play_emote()` 开头。
-			#   两处各校验一次的话，删掉其中一处判据根本不会红（行为被另一处兜住了）——
-			#   那是"看着有两道防线、实际只有一道"的典型（§111 同一公式只许一处）。
-			#   这里只负责把 Variant 收成 int（§109：Dictionary 取值赋给 int 形参前显式转）。
-			_play_emote(1, int(msg.get("e", -1)))
+		# ⚰️ 2026-11-02 墓碑（名字不许回收）：这里原有 `"emote"` 分支（收到对端表情 ⇒
+		#   `_play_emote(1, idx)`）。整套表情删除后这个 m 值不再有人发，也就不该有人收。
+		# ★ 协议兼容性：老的客端（旧版本）仍可能发 `m="emote"` —— 落到本函数的 `_` 默认分支
+		#   被忽略即可，**不需要**在这里留一条空分支（留了反而让人以为它还活着）。
+		"chat":
+			# ── 文字聊天（2026-11-01）──
+			# ★ 与表情同一定位：不改棋盘状态、不要房主仲裁 ⇒ **不进** `_apply_action`。
+			# ★ 清洗与截断的唯一实现在 `_sanitize_chat()`：这里**不再校验一遍**。
+			#   两处各校验一次的话，删掉其中一处判据根本不会红（行为被另一处兜住）——
+			#   那是"看着两道防线、实际只有一道"（§111 同一公式只许一处）。
+			#   这里只负责把 Variant 收成 String（§109：Dictionary 取值赋给 String 形参前显式转）。
+			_append_chat(1, str(msg.get("t", "")))
 		"request":
 			# 仅房主处理：校验 → 本地应用 → 广播回放给对端
 			if not _is_host:
 				return
-			var action: Dictionary = msg["action"]
+			# ★ 2026-11-03：与 `_net_send_action()` 的房主分支**同一个归一化入口** ——
+			#   加入方点「随机」时发来的是哨兵，这里换成具体 id 后再校验/应用/广播。
+			#   两处各写一遍的话，只改一处就会让"加入方点随机"与"房主点随机"行为分叉。
+			var action: Dictionary = _normalize_net_action(msg["action"])
 			if not _validate_action(action, _peer_white):
 				print("拒绝非法/非当前回合动作：", action)
 				return
@@ -21154,7 +23870,13 @@ func _on_relay_failed() -> void:
 	_net_phase = "playing"
 	_net_awaiting = false
 	_clear_ready_overlay()
-	_show_result_overlay("与对家断开", PackedStringArray(["与对家的连接已丢失，按返回菜单"]))
+	# 选盘阶段掉线：覆盖层与已选的一半都要清 —— 留着会让"对方已选"挂在屏幕上
+	# （而对手已经不在了），而且下一局 `_enter_board_pick()` 会以假的半数直接开局。
+	_clear_size_tier_overlay()
+	_clear_board_pick_overlay()
+	_board_pick = {}
+	_sized_tier = 1
+	_show_result_overlay("与对家断开", PackedStringArray(["与对家的连接已丢失"]))
 	_update_hud()
 
 ## 纯权威应用：落子 / 加砖 / 停手 / 认输 / 重置。服务器本地执行一次，
@@ -21173,7 +23895,22 @@ func _apply_action(action: Dictionary) -> void:
 			restart_game(int(action.get("seed", -1)))
 		"ready":
 			_on_ready(action["color"])
+		"size_pick":
+			# 格数档（2026-11-03）：房主单选 → 应用后广播 → 两端记同一档，然后进选盘阶段。
+			# ★ 只有房主能发（`_validate_action()` 里拦）；这里是**唯一**写 `_sized_tier` 的地方。
+			_sized_tier = clampi(int(action.get("tier", 1)), 0, SIZE_TIERS.size() - 1)
+			_clear_size_tier_overlay()
+			_enter_board_pick()
+		"board_pick":
+			# 选盘（2026-11-03）：房主应用后广播，两端 `_board_pick` 同步；
+			# 两边都齐了 ⇒ `_on_board_pick()` 里调 `_host_start_game()`（只有房主会走进去）。
+			_on_board_pick(int(action.get("color", Stone.BLACK)), int(action.get("board", -1)))
 		"start":
+			# 抽中的盘随 start 一起下发：加入方的几何已经由 `init` 换好了，这里只记
+			# 盘型/选盘结果 —— 谱头、启动日志、HUD 都要跟房主说同一件事。
+			_net_board_chosen = int(action.get("board", _net_board_chosen))
+			if _net_board_chosen >= 0:
+				GameConfig.board_type = _net_board_chosen
 			_begin_play()
 	_update_hud()
 	queue_redraw()
@@ -21273,14 +24010,13 @@ func undo_to_my_turn() -> int:
 	#   ① `_ai_gen += 1`：AI 正在思考时，它的协程醒来只查 `gen != _ai_gen`
 	#     （`_start_ai_turn` 第 799 行）⇒ 不递增的话，**正在算的那手会被落在已撤销的盘面上**
 	#     —— 即"悔完棋 AI 又落一子"，而且是落在一个根本不存在的局面里。
-	#   ② `is_ai_thinking = false` + `_show_ai_hud(false)`：思考态的收尾原本只在
-	#     `_start_ai_turn` 自己的收尾里做，悔棋把它掐断 ⇒ 秒表协程会永远 await 下去。
+	#   ② `is_ai_thinking = false`：思考态的收尾原本只在 `_start_ai_turn` 自己的收尾里做，
+	#     悔棋把它掐断 ⇒ 那个标记会一直挂着（输入闸全吞、`can_undo()` 恒假）。
 	#   ③ 末尾重新 `_start_ai_turn()`：**没人会因为"盘面变了"自动触发 AI 回合**
 	#     （`_start_ai_turn()` 的四个调用点全是"玩家刚下完子"）⇒ 漏了这行，
 	#     悔完棋 AI 就永远不再走（用户看到的是"悔棋没反应"）。
 	_ai_gen += 1
 	is_ai_thinking = false
-	_show_ai_hud(false)
 	# 终局态也要收回：悔棋的语义是"退回到我上次能走的时候"，那时这局还没结束。
 	#   不收回的话 `game_over` 仍为 true → HUD 继续显示结算、`can_undo()` 恒 false、
 	#   `_validate_action` 也拒收联机动作，等于"悔了但这局还锁着"。
@@ -21364,9 +24100,19 @@ func _validate_action(action: Dictionary, sender: int) -> bool:
 		if not (_is_net_server() and sender == 1):
 			return false
 	# 准备（ready）不校验回合：任意一方在自己准备阶段点「准备」都合法
-	if action["type"] != "ready":
+	# ★ 2026-11-03：选盘（board_pick）同理 —— 它发生在 ready 之后的 picking 阶段，
+	#   那时 `current_player` 恒为黑（还没落子），按回合校验会把**白方**的选盘全部拒收
+	#   ⇒ 白方点了没反应、房主永远等不到第二张（静默失效：日志只有一行"拒绝非法动作"）。
+	#   格数档（size_pick）同样跳过回合校验，但**另有更强的限制**（见下一条）。
+	if action["type"] != "ready" and action["type"] != "board_pick" \
+			and action["type"] != "size_pick":
 		if current_player != color:
 			return false
+	# ★★ 格数档**只许房主定**（用户 2026-11-03 裁决「房主单选、加入方跟随」）：
+	#   加入方改包发上来一条 size_pick 也必须拒 —— 否则"两人各定一档"会让盘面大小对不上，
+	#   而两端的盘面靠"同一套配方 + 同一个种子"保持一致，一跳档就是两张不同的盘。
+	if action["type"] == "size_pick" and not (_is_net_server() and sender == 1):
+		return false
 	match action["type"]:
 		"place":
 			var t: int = action.get("tile", -1)
@@ -21374,7 +24120,7 @@ func _validate_action(action: Dictionary, sender: int) -> bool:
 				return false
 			if t == ko_point:
 				return false
-		"pass", "resign", "reset", "ready", "start":
+		"pass", "resign", "reset", "ready", "start", "board_pick", "size_pick":
 			pass
 		_:
 			return false
@@ -21459,8 +24205,7 @@ func _on_undo_res_received(ok: bool, target_color: int) -> void:
 		_clear_undo_overlay()
 	else:
 		_clear_undo_overlay()
-		_show_result_overlay("对方拒绝了悔棋",
-				PackedStringArray(["悔棋需要双方同意，本次未撤销"]))
+		_show_result_overlay("对方拒绝了悔棋", PackedStringArray())
 	_undo_pending_from = -1
 	_undo_freeze = false
 	_update_hud()
@@ -21610,6 +24355,13 @@ func _init_payload() -> Dictionary:
 		"hat_kind": _hat_kind_used,      # 爱因斯坦大类的种类（帽子/海龟/幽灵）——换种类 = 换盘，必须下发
 		"hat_target": _hat_target,
 		"hat_pool": _hat_pool_size,
+		# ★ 2026-11-03：盘型 + 尺寸档也下发。几何本来就在载荷里（顶点/瓷砖/邻接），
+		#   但 `GameConfig.board_type/board_size` 是**加入方谱头与启动日志的真源**
+		#   （`_record_begin()` 读它）—— 不下发的话，加入方那本谱记的是"自己菜单选的那张盘"，
+		#   而实际下的是房主的盘 ⇒ 复盘重放出一张别的盘（而且一直没报错）。
+		#   选盘阶段（各选一张）之后这条更硬：加入方选的盘可能根本没被抽中。
+		"board_type": GameConfig.board_type,
+		"board_size": GameConfig.board_size,
 	}
 
 # ★★ 2026-09-30 §24 第 5 步删掉了 `@rpc sync_init(data)` **整个函数** ——
@@ -21646,6 +24398,12 @@ func _apply_snapshot(data: Dictionary) -> void:
 	# 这里仍把目标格数带过来，便于客户端日志核对（盘面本体以 vertices/tiles 为准）。
 	_hat_target = int(data.get("hat_target", _hat_target))
 	_hat_pool_size = int(data.get("hat_pool", _hat_pool_size))
+	# 盘型 / 尺寸档：加入方的谱头与启动日志的真源（见 `_init_payload()` 里那一段）。
+	# 载荷里没有它（旧版本房主）时保留本机值 —— 与 `hat_kind` 那条同一个退化口径。
+	if data.has("board_type"):
+		GameConfig.board_type = int(data["board_type"])
+	if data.has("board_size"):
+		GameConfig.board_size = int(data["board_size"])
 	_cube_star_tiles = _int_array(data.get("cube_star", null))
 	_rand_seed = int(data.get("rand_seed", _rand_seed))
 	# 房主已按视口缩放过顶点，但两边窗口尺寸未必相同 → 按本机视口重新适配一次。
@@ -21683,23 +24441,150 @@ func _int_array(v: Variant) -> Array[int]:
 	return out
 
 ## ====== 双方准备阶段 ======
-## 连接建立后进入 ready：双方都点「准备」→ 房主广播 start → 双方进入 playing。
+## 连接建立后进入 ready：双方都点「准备」→（2026-11-03 起）**进入各选一张棋盘** →
+## 房主在两张里抽一张 → 双方进入 playing。
+##
+## ★ 阶段门是**单向**的：ready → picking → playing，每一档只有它自己那个函数能写
+##   （`_on_ready` / `_enter_board_pick` / `_begin_play`）。判据 ⑥⑦⑧ 盯这条链。
 func _on_ready(color: int) -> void:
 	_ready_set[color] = true
 	_update_ready_overlay()
-	if _is_net_server() and _ready_set.has(Stone.BLACK) and _ready_set.has(Stone.WHITE):
-		_host_start_game()
+	# ★★ 这里**不许**带 `_is_net_server()`：进入下一阶段是**两端都要做**的事
+	#   （房主应用 ready + 广播，加入方回放同一条 apply ⇒ 两边 `_ready_set` 同时凑齐）。
+	#   只在房主那侧进入的话，加入方会永远停在"准备"浮层上 —— 而且不报错
+	#   （它只是"再也没往下走"，日志里连一行拒绝都没有）。
+	# ★ 2026-11-03：双方准备齐后先进**格数档**（`sizing`），那一档只有房主能定（见 `_enter_size_tier`）。
+	if _ready_set.has(Stone.BLACK) and _ready_set.has(Stone.WHITE):
+		_enter_size_tier()
 
-## 房主：双方已准备 → 本机开始并广播 start 给客户端
+## 房主：双方已选完 → 抽签 + 换盘 + 下发 + 开局。
+## ★ 顺序是**语义**：先把盘换掉（`_apply_net_board`）再 `_send_init()` —— 加入方的
+##   `_apply_snapshot()` 套的是**新**几何；反过来先发后换，加入方拿到的还是旧盘。
+## ★ 抽签只在**两张**里选（`_draw_net_board`），不许出现第三张：这是用户口令的原话。
 func _host_start_game() -> void:
+	var chosen: int = _draw_net_board()
+	_net_board_chosen = chosen
+	_apply_net_board(chosen)
+	_send_init()
 	_begin_play()
-	# ★ 第 5 步后通道是唯一路径（`else: apply_action.rpc(...)` 那行 ENet 分支已删）。
-	_chan.send_message({"m": "apply", "action": {"type": "start"}})
+	# `start` 带上抽中的盘：加入方只做记账（几何已经由上面那条 init 换好了），
+	# 但**谱头 / HUD / 日志**要跟房主写同一个盘型，否则加入方那侧的"本局是什么盘"是假的。
+	_chan.send_message({"m": "apply",
+		"action": {"type": "start", "color": _net_color, "board": chosen}})
+	print("[联机] 双方各选一张 → 抽中「%s」开局" % MenuModel.board_label(chosen))
 
-## 进入对局（本地）：清准备覆盖层、切到 playing、刷新 HUD
+## 抽签：两张里随机一张。两边选同一张时就是它（不必掷）。
+## 纯读 `_board_pick`、不改任何状态 ⇒ `--readygate` ⑦ 能直接喂表验它。
+func _draw_net_board() -> int:
+	var b: int = int(_board_pick.get(Stone.BLACK, -1))
+	var w: int = int(_board_pick.get(Stone.WHITE, -1))
+	if b < 0:
+		return w
+	if w < 0:
+		return b
+	if b == w:
+		return b
+	return b if (randi() % 2) == 0 else w
+
+## ====== 联机格数档（小 / 中 / 大 = 9×9 / 13×13 / 19×19）======
+## 2026-11-03 用户口令「在选盘之前，区分棋盘格数很重要，这决定了对局的时间，必须在进入对局前
+## 先搞定，分成三档」+ 追问裁决「三档 = 小/中/大 就近映射」「房主单选、加入方跟随」。
+## ★★ 2026-11-06 用户口令「统一所有棋盘格数，全部对标常规棋盘的 9*9 13*13 19*19」⇒
+##   **三档就是三个常规盘**，每档只记"哪一档 + 实测格数的合理带"。
+##
+## ★★★ 本表**不再**持有 per-board 覆盖参数（`cube_r`/`kite_r`/`snow_r`/`hat_tiles` 全删）。
+##   为什么删：那批覆盖键与 `_apply_board_size()` 里的阶梯是**同一个东西的第二份抄写**，
+##   两份必然分家（11-05 就为了"爱因斯坦三档只差 9.7%"往表里加过 `hat_tiles`，
+##   而真正的病根是 `hat_rand_tiles` 与 `hat_big_tiles` 只差 15%）。现在阶梯**只有一份**，
+##   在 `_apply_board_size()`；本表只回答两件事：这一档写哪个枚举、这一档的格数应该在什么带里。
+##
+## ★ `range` 是**判据**（`--netboardtest` ⑧ 实测 15 张盘逐一核对它），不是注释：
+##   落进带外 ⇒ 当场红。带的宽度就是"离散阶梯能就近到多近"的余量 ——
+##   立方体环数只能跳（环2=57、环3=111），81 夹在中间，取近的 57 就是 −30%，这是几何下限。
+## ★ `range` 三带**互不重叠**（55~115 / 135~210 / 280~420）：这是"三档真能区分对局时长"
+##   的表级保证，不依赖实测。
+const SIZE_TIERS: Array = [
+	{"label": "小", "hint": "9×9 · 约 57~90 格", "range": [55, 115], "size": GameConfig.SMALL},
+	{"label": "中", "hint": "13×13 · 约 144~183 格", "range": [135, 210], "size": GameConfig.STANDARD},
+	{"label": "大", "hint": "19×19 · 约 288~408 格", "range": [280, 420], "size": GameConfig.ENHANCED},
+]
+
+## 档位之间**必须**拉开的比例（⑧ 判据用）。
+## ★★ 2026-11-06 三档统一对标 81/169/361 之后，相邻档的**设计**比就是 2.09 / 2.14 ——
+##   扣掉各盘离散取整的损失，实测最小值也有 1.76（彭罗斯 80→170）。阈值取 1.25 留的余量
+##   正好够「某张盘的某一档被迫跳级」（例如立方体 57→183 = 3.2），又足以让
+##   "中档配成了小档"这种错立刻红。
+##   ★ 这条就是"三档能区分对局时长"的下限：相邻档至少差 25% 的格数。
+const SIZE_TIER_MIN_STEP: float = 1.25
+
+## 档位号 → 可读名（"中档"）。越界退"中"（`_sized_tier` 的默认值就是 1）。
+func _size_tier_label(tier: int) -> String:
+	var t: int = clampi(tier, 0, SIZE_TIERS.size() - 1)
+	return str(SIZE_TIERS[t]["label"]) + "档"
+
+## 档位号 → 该档要写进 `GameConfig.board_size` 的枚举（唯一取法 = `SIZE_TIERS`）。
+func _size_tier_size(tier: int) -> int:
+	var t: int = clampi(tier, 0, SIZE_TIERS.size() - 1)
+	return int(SIZE_TIERS[t]["size"])
+
+## 档位号 → 该档的**格数带** `[lo, hi]`（`--netboardtest` ⑧ 的判据）。
+func _size_tier_range(tier: int) -> Array:
+	var t: int = clampi(tier, 0, SIZE_TIERS.size() - 1)
+	return SIZE_TIERS[t]["range"]
+
+## 把档位落到盘面参数上。
+## ★★ 2026-11-06 之后这里**只有一步**：写枚举 → 交给 `_apply_board_size()`。
+##   原先还有 snow_r / cube_r / kite_r / hat_tiles 四行"盘型专属覆盖"，那是
+##   `_apply_board_size()` 里那张阶梯的**第二份抄写** ⇒ 已删（见 `SIZE_TIERS` 上面那段）。
+##   ⚠️ 顺序仍是语义：盘型必须在调用前就落好（`_apply_board_size()` 要按盘型算环数/层数）。
+func _apply_size_tier(tier: int) -> void:
+	GameConfig.board_size = _size_tier_size(tier)
+	_apply_board_size(GameConfig.board_size)
+
+## 房主侧真换盘：档位 + 盘型 → `GameConfig` 三个字段 + 重生成几何 + 清盘面（谱头跟着重开）。
+## ★ 为什么必须重生成而不是"沿用 `_ready()` 建的那张"：那张盘是**进局时**按房主菜单
+##   造的，与双方刚选的两张无关；抽中的若是另一张，几何整套都得换
+##   （顶点/瓷砖/邻接/盘型标记 —— 加入方那侧由 `_send_init()` 同一套载荷覆盖）。
+func _apply_net_board(bid: int) -> void:
+	GameConfig.board_type = bid
+	# ★★ 2026-11-06：联机**一律固定形状**。
+	#   为什么必须在这里显式清零：`board_random_shape` 是**本机菜单**的选择，两端各自不同 ——
+	#   房主选了「彭罗斯随机」而加入方没选，就会一端生随机形状、一端生固定盘，
+	#   而载荷里的顶点/邻接只在 `_send_init()` 时才覆盖 ⇒ 抽签那一刻两端**已经分叉**了。
+	#   （联机的"随机"由各自选盘 + 抽签表达，不是形状随机；见 `_show_board_pick_overlay()`。）
+	GameConfig.board_random_shape = false
+	# 格数档（2026-11-03）：盘型先落，再按这一档写 `board_size` + 让 `_apply_board_size()`
+	# 算出该盘该档的环数/层数/裁剪半径/目标格数（**阶梯只有那一份**）。
+	_apply_size_tier(_sized_tier)
+	# ★★ 2026-11-06：**无条件**重抽机器种子（原来只在随机档抽）。
+	#   理由：爱因斯坦三档现在全走**非随机**枚举（为了用 `hat_tiles` 精确指定格数），
+	#   而它的"选片"是由 `_rand_seed` 驱动的 ⇒ 不抽种子的话，同一档每次开局都是**同一张盘**
+	#   （"每局一张新盘"就没了）。其它盘型的固定档几何不吃种子 ⇒ 抽了也无副作用。
+	_rand_seed = _fresh_seed()
+	generate_board()
+	_adapt_to_screen()
+	if ai_engine:
+		ai_engine.setup(adjacency, AI_COLOR)
+		ai_engine.time_budget_ms = ai_time_ms
+		ai_engine.threads = GameConfig.ai_threads
+		ai_engine.root_width = GameConfig.ai_root_width
+	# ★ 这里**不需要**为"0 手谱"额外加守卫：`reset_game()` 一开头的
+	#   `_record_close_if_unfinished() → _record_flush(true) → GameRecord.mark_interrupted()`
+	#   自己就会对 0 手谱直接 return（"空谱不必入库"）。
+	#   2026-11-03 我先在这里写过一条 `if moves.is_empty(): _record = {}` —— 阴性对照把它拆掉后
+	#   判据**一条都没红**（棋谱目录条数不变）⇒ 那条守卫是**重复防线**（两道防线实际只有一道），
+	#   判据也是恒真式。按本工程口径：拆掉，不留"看着更安全"的死代码。
+	# 清盘面 + 重开谱（`reset_game()` 是"清盘面重下一局"的唯一入口，谱头随之读新的盘型/种子）
+	reset_game(true)
+	print("[联机] 本局棋盘已切到：%s｜%s（%d 格）｜种子 %d" % [
+		MenuModel.board_label(bid), _size_tier_label(_sized_tier), tiles.size(), _rand_seed])
+
+## 进入对局（本地）：清准备/格数档/选盘覆盖层、切到 playing、刷新 HUD
 func _begin_play() -> void:
 	_net_phase = "playing"
 	_clear_ready_overlay()
+	_clear_size_tier_overlay()
+	_clear_board_pick_overlay()
 	_update_hud()
 	queue_redraw()
 
@@ -21773,10 +24658,14 @@ func _update_ready_overlay() -> void:
 	#   座位可选之后，"你执黑还是白"不再是恒定事实（房主可能执白），而准备阶段正是
 	#   玩家唯一能确认这件事的时刻；只写「等待双方都点击准备」会让执白的人一直以为
 	#   自己执黑（进局后 HUD 才纠正，已经落子了）。
+	# ★ 2026-11-02：删掉第三行「双方都点「准备」后才开始对局」—— 上方那个按钮就叫
+	#   「准备」、两色状态行已经把"谁好了 / 谁没好"列出来，再说一遍是纯啰嗦。
+	# ★ 2026-11-03：但**下一阶段要做什么**必须说出来 —— 准备之后不再是直接开局，
+	#   而是「各选一张棋盘」（见 `_enter_board_pick()`）。不写这一句，玩家点完准备会以为卡住了。
 	if _ready_hint != null and is_instance_valid(_ready_hint):
 		var mine: String = "黑" if _net_color == Stone.BLACK else "白"
 		var theirs: String = "白" if _net_color == Stone.BLACK else "黑"
-		_ready_hint.text = "你执%s · 对方执%s\n黑 %s ｜ 白 %s\n双方都点「准备」后才开始对局" % [
+		_ready_hint.text = "你执%s · 对方执%s\n黑 %s ｜ 白 %s\n准备后：各选一张棋盘，随机抽一张开局" % [
 				mine, theirs,
 				"已准备" if _ready_set.has(Stone.BLACK) else "未准备",
 				"已准备" if _ready_set.has(Stone.WHITE) else "未准备"]
@@ -21791,11 +24680,303 @@ func _clear_ready_overlay() -> void:
 	_ready_btn = null
 	_ready_hint = null
 
+## ====== 阶段三：房主先定格数档，再各选一张棋盘（2026-11-03）======
+## 用户口令（两句，按顺序落地）：
+##   ① 「先确认两个人之后，每个人各选一张图，然后在这两张图里面随机选取一个开始对局」
+##   ② 「在选盘之前，区分棋盘格数很重要，这决定了对局的时间，必须在进入对局前先搞定，分成三档」
+## ⇒ 阶段链：`ready`（双方准备）→ `sizing`（**房主定格数档**）→ `picking`（各选一张）→ `playing`。
+##
+## ★ 为什么"选"必须发生在**对局内**而不是菜单：菜单侧的「对弈」页只看得见本机自己，
+##   而这两件事都要**双方都看得见对方选了什么**。连接建立（= 两个人都已确认在场）正是那一刻。
+## ★ 格数档由**房主单选**（用户 2026-11-03 裁决）：两人必须用同一档，各选再抽会让
+##   "开局前多一步无谓的博弈"——而这一档的语义是"这局打多久"，不是"我要什么"。
+func _enter_size_tier() -> void:
+	if _net_phase == "sizing":
+		return
+	_net_phase = "sizing"
+	_sized_tier = -1            # -1 = 还没选（`_apply_size_tier()` 的默认值 1 只兜漏选路径）
+	_show_size_tier_overlay()
+
+## 房主点某一档：发给对端（房主本地即权威 ⇒ `_apply_action()` 会立刻应用并广播）。
+## ★ 加入方**没有**这个按钮（`_show_size_tier_overlay()` 只替补位文字），
+##   而且即使有人改包发上来，`_validate_action()` 也会以"只有房主能定格数档"拒掉。
+func _on_size_tier_pressed(tier: int) -> void:
+	if _net_phase != "sizing":
+		return
+	if not _is_net_server():
+		return
+	_net_send_action({"type": "size_pick", "color": _net_color,
+		"tier": clampi(tier, 0, SIZE_TIERS.size() - 1)})
+
+## 格数档浮层：房主三颗按钮（带格数范围），加入方一行等待文字。
+func _show_size_tier_overlay() -> void:
+	_clear_ready_overlay()
+	_clear_size_tier_overlay()
+	_size_layer = GameConfig.new_themed_layer()
+	_size_layer.name = "SizeTierOverlay"
+	_size_layer.layer = 40
+	add_child(_size_layer)
+	var panel := PanelContainer.new()
+	_size_layer.add_child(panel)
+	GameConfig.style_dialog_panel(panel)
+	_center_popup(panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 12)
+	panel.add_child(vb)
+	var title := Label.new()
+	title.text = "先定本局格数"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 22)
+	title.add_theme_color_override("font_color", GameConfig.dialog_title_color())
+	vb.add_child(title)
+	var hint := Label.new()
+	hint.name = "SizeHint"
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_size_override("font_size", 15)
+	hint.add_theme_color_override("font_color", GameConfig.dialog_text_color())
+	vb.add_child(hint)
+	_size_hint = hint
+	_size_btns.clear()
+	# 加入方：只有等待文字，**不画按钮**（画了又点不动 = "点了没反应"，本项目最忌讳那一家）
+	if _is_net_server():
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		row.alignment = BoxContainer.ALIGNMENT_CENTER
+		vb.add_child(row)
+		for i in SIZE_TIERS.size():
+			var b := Button.new()
+			b.name = "SizeTier%d" % i
+			b.set_meta("tier", i)
+			b.focus_mode = Control.FOCUS_NONE
+			b.custom_minimum_size = Vector2(132, 56)
+			GameConfig.style_dialog_button(b)
+			b.pressed.connect(_on_size_tier_pressed.bind(i))
+			row.add_child(b)
+			_size_btns.append(b)
+	var note := Label.new()
+	note.text = "格数决定这局下多久 · 同一档在各盘型下格数不同（见各档范围）"
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.add_theme_font_size_override("font_size", 14)
+	note.add_theme_color_override("font_color", GameConfig.dialog_text_color())
+	vb.add_child(note)
+	_update_size_tier_overlay()
+
+## 格数档浮层的唯一派生点：按钮文案（档名 + 该档的格数范围）与提示行。
+## ★ 这里**不派生"已选"态**：点下去之后 `_apply_action()` 会在同一帧里清掉本浮层并进选盘
+##   （`_clear_size_tier_overlay()` + `_enter_board_pick()`）⇒ 写"已选"分支等于写一段
+##   永远不会被看见的代码（本工程口径：看着更安全的死分支比没有更危险）。
+##   防连点由 `_on_size_tier_pressed()` 的 phase 闸负责，不靠按钮 disabled。
+func _update_size_tier_overlay() -> void:
+	if _size_layer == null or not is_instance_valid(_size_layer):
+		return
+	for i in _size_btns.size():
+		var b: Button = _size_btns[i]
+		if b == null or not is_instance_valid(b):
+			continue
+		var tier: int = int(b.get_meta("tier", i))
+		b.text = "%s\n%s" % [str(SIZE_TIERS[tier]["label"]), str(SIZE_TIERS[tier]["hint"])]
+	if _size_hint != null and is_instance_valid(_size_hint):
+		_size_hint.text = "由你定（房主）· 双方用同一档" if _is_net_server() \
+			else "等待房主选择格数档…"
+
+func _clear_size_tier_overlay() -> void:
+	if _size_layer != null and is_instance_valid(_size_layer):
+		_size_layer.queue_free()
+	_size_layer = null
+	_size_hint = null
+	_size_btns.clear()
+
+## ====== 阶段四：双方各选一张棋盘 ======
+## 用户口令：「先确认两个人之后，每个人各选一张图，然后在这两张图里面随机选取一个开始对局」。
+##
+## ★ 为什么这个"选"必须发生在**对局内**而不是菜单：菜单侧的「对弈」页只看得见本机自己，
+##   而"各选一张"最关键的是**双方都看得见对方选了什么** —— 否则抽签结果无从核对，
+##   玩家只会觉得"凭什么是这张"。连接建立（= 两个人都已确认在场）正是那一刻。
+## ★ 两端各自本地进入这一阶段：房主应用 ready + 广播，加入方回放同一条 apply
+##   ⇒ 两边的 `_ready_set` 同时凑齐 ⇒ `_on_ready()` 里那条判据两边都成立。
+func _enter_board_pick() -> void:
+	if _net_phase == "picking":
+		return
+	_net_phase = "picking"
+	_board_pick = {}
+	_show_board_pick_overlay()
+
+## 玩家点「选这张」：发给房主（server-authoritative）。
+## ★ 与「准备」同一条纪律：**不做本地乐观更新** —— 状态等房主应用 + 广播回来再落
+##   （否则"我选了"与"对端知道我选了"会有一段看不见的分叉窗口）。
+func _on_board_pick_pressed(bid: int) -> void:
+	if _net_phase != "picking":
+		return
+	_net_send_action({"type": "board_pick", "color": _net_color, "board": bid})
+
+## 权威应用：记下这一方选的盘，两边都选完了 ⇒ 房主抽签开局。
+func _on_board_pick(color: int, bid: int) -> void:
+	if _net_phase != "picking":
+		return
+	# 「随机」哨兵**只许房主消化**（见 `_normalize_net_action()`）。加入方在这里收到哨兵 =
+	# 归一化那一步断了 ⇒ 直接丢弃：宁可少一张选盘，也不要两端各掷一次——
+	# 那会让抽签结果不同，而对局从第一手就分叉，且一条错都不报。
+	if bid == NET_PICK_RANDOM:
+		return
+	# 非法 id 静默丢弃（脏包 / 旧版本端）：宁可少一条选盘，也不许把一张不存在的盘交给生成器
+	# （`generate_board()` 的 `_` 分支会把它当成彭罗斯 —— 那就成了"抽到第三张"）。
+	# ★ 2026-11-06：这里判 `board_id_valid()` 就够 —— 别名「随机」盘型已删除
+	#   （棋盘栏改成「盘型 × 随机形状」，随机由各自选盘 + 抽签表达）。id 无效仍静默丢弃。
+	if not MenuModel.board_id_valid(bid):
+		return
+	_board_pick[color] = bid
+	_update_board_pick_overlay()
+	if _is_net_server() and _board_pick.has(Stone.BLACK) and _board_pick.has(Stone.WHITE):
+		_host_start_game()
+
+## 「帮我抽一张」怎么掷：**从五张真盘里均匀抽一张**。
+## ★ 真源 = `MenuModel.board_ids()`（8 个选项去重后的 5 个盘型 id；筝形/爱因斯坦没有随机版，
+##   所以 8 项里各只出现一次）。用**选项清单**抽会把彭罗斯权重翻倍（固定/随机各一份），
+##   而抽出来的是**盘型**，与形状随机无关 —— 联机一律固定形状，见 `_apply_net_board()`。
+## ★ 只有房主调它（`_normalize_net_action()` 是唯一调用点），所以两端不会各掷一次。
+func _roll_board_pick() -> int:
+	var ids: Array = MenuModel.board_ids()
+	if ids.is_empty():
+		return GameConfig.BOARD_PENROSE
+	return int(ids[randi() % ids.size()])
+
+
+## 房主侧（= 权威方）的动作归一化：把「随机」哨兵换成**具体**盘 id。
+##
+## ★★ 为什么这一步不可省、且只许放在这一处：`board_pick` 的 `board` 允许是
+##   `NET_PICK_RANDOM`（「帮我抽一张」）。把哨兵原样广播出去的话，**加入方会自己再掷一次**
+##   ⇒ 两端记下的是两张不同的盘 ⇒ 抽签结果各异 ⇒ 对局从第一手就分叉（不报错，最难查）。
+##   归一化放在**广播之前**，两端拿到的就永远是同一个具体 id。
+## ★ 非 `board_pick` / 非哨兵的动作**原样返回**（不 duplicate、不做任何加工 —— 保持"归一化是
+##   恒等变换"这条退化保证：既有动作的路径一个字节都不变）。
+func _normalize_net_action(action: Dictionary) -> Dictionary:
+	if str(action.get("type", "")) != "board_pick":
+		return action
+	if int(action.get("board", -1)) != NET_PICK_RANDOM:
+		return action
+	var a: Dictionary = action.duplicate()
+	a["board"] = _roll_board_pick()
+	print("[联机] 「随机」已代抽：%s" % MenuModel.board_label(int(a["board"])))
+	return a
+
+## 选盘覆盖层。与「准备」浮层同一套画法（主题化 Layer + PanelContainer + VBox）。
+func _show_board_pick_overlay() -> void:
+	_clear_ready_overlay()
+	_clear_board_pick_overlay()
+	_pick_layer = GameConfig.new_themed_layer()
+	_pick_layer.name = "BoardPickOverlay"
+	_pick_layer.layer = 40
+	add_child(_pick_layer)
+	var panel := PanelContainer.new()
+	_pick_layer.add_child(panel)
+	GameConfig.style_dialog_panel(panel)
+	_center_popup(panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 12)
+	panel.add_child(vb)
+	var title := Label.new()
+	title.text = "各选一张棋盘（%s）" % _size_tier_label(_sized_tier)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 22)
+	title.add_theme_color_override("font_color", GameConfig.dialog_title_color())
+	vb.add_child(title)
+	var hint := Label.new()
+	hint.name = "PickHint"
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_size_override("font_size", 15)
+	hint.add_theme_color_override("font_color", GameConfig.dialog_text_color())
+	vb.add_child(hint)
+	_pick_hint = hint
+	# 两列网格：五张盘刚好排成 3 行（单列会高过视口，窄屏尤其）
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 10)
+	grid.add_theme_constant_override("v_separation", 10)
+	vb.add_child(grid)
+	_pick_btns.clear()
+	# 项的真源是 `MenuModel.board_ids()`（= 棋盘选项清单**去重后**的盘型 id）——
+	# 这里**不另写一张表**：加一张盘只改 `MenuModel.BOARD_KINDS`，各处自动跟上。
+	# ★★ 2026-11-06：这里**只铺盘型**，不铺「XX随机」那 4 个选项。理由：
+	#   ① 格数档已经在上一阶段定死（形状随机只换形状、不换格数），联机的"随机"由
+	#      「各自选一张 → 在两张里抽一张」表达，本覆盖层**自己**就有一个「随机」按钮；
+	#   ② `_board_pick` 只存一个盘型 id，塞不进"这张盘随机吗"第二根轴 —— 要支持它就得
+	#      改 `board_pick` 载荷、`start` 载荷、`_init_payload()`、谱头四处，
+	#      而收益是"联机也能玩随机形状盘"。等真有需求再一起改，别半做。
+	#   ③ 联机**一律固定形状**（`_apply_net_board()` 里显式清零），所以铺随机项会让
+	#      UI 承诺一件做不到的事。
+	for k in MenuModel.board_ids():
+		var bid: int = int(k)
+		var b := Button.new()
+		b.text = MenuModel.board_label(bid)
+		b.set_meta("bid", bid)
+		b.focus_mode = Control.FOCUS_NONE
+		b.custom_minimum_size = Vector2(148, 44)
+		GameConfig.style_dialog_button(b)
+		b.pressed.connect(_on_board_pick_pressed.bind(bid))
+		grid.add_child(b)
+		_pick_btns.append(b)
+	# 「随机」= 让房主代抽一张（`NET_PICK_RANDOM`）。2026-11-03 用户口令「再加一个可以选的
+	# 随机棋盘」⇒ 它必须和五张盘**摆在同一个网格里**：放到别的行/别的控件里，读起来就像
+	# "另一种操作"（而它其实是同一件事：我在选一张盘，只是让她替我掷）。
+	var rnd := Button.new()
+	rnd.name = "PickRandom"
+	rnd.text = "随机"
+	rnd.set_meta("bid", NET_PICK_RANDOM)
+	rnd.focus_mode = Control.FOCUS_NONE
+	rnd.custom_minimum_size = Vector2(148, 44)
+	GameConfig.style_dialog_button(rnd)
+	rnd.pressed.connect(_on_board_pick_pressed.bind(NET_PICK_RANDOM))
+	grid.add_child(rnd)
+	_pick_btns.append(rnd)
+	var note := Label.new()
+	note.text = "「随机」由房主代抽一张；两张里再随机抽一张开局"
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.add_theme_font_size_override("font_size", 14)
+	note.add_theme_color_override("font_color", GameConfig.dialog_text_color())
+	vb.add_child(note)
+	_update_board_pick_overlay()
+
+## 覆盖层的**唯一派生点**：双方各选了什么 / 我自己选中的那块打勾。
+## 全部从 `_board_pick` 现读，不缓存（铁律 7：状态一处写、显示一处派生）。
+func _update_board_pick_overlay() -> void:
+	if _pick_layer == null or not is_instance_valid(_pick_layer):
+		return
+	var mine: int = int(_board_pick.get(_net_color, -1))
+	var theirs: int = int(_board_pick.get(_opposite_stone(_net_color), -1))
+	if _pick_hint != null and is_instance_valid(_pick_hint):
+		_pick_hint.text = "你：%s ｜ 对方：%s" % [
+			"未选" if mine < 0 else MenuModel.board_label(mine),
+			"未选" if theirs < 0 else MenuModel.board_label(theirs)]
+	for b in _pick_btns:
+		if b == null or not is_instance_valid(b):
+			continue
+		var bid: int = int(b.get_meta("bid", -1))
+		# ★ 「随机」不是一张盘（`MenuModel.board_label(-2)` 返回空串 ⇒ 照通用路径写会把字抹掉）。
+		#   它**永远可点**：抽到的具体盘不满意，再点一次就是重掷。
+		if bid == NET_PICK_RANDOM:
+			b.text = "随机"
+			b.disabled = false
+			continue
+		b.text = ("✓ " if bid == mine else "") + MenuModel.board_label(bid)
+		b.disabled = bid == mine       # 已选中的那块不再可点（改主意：另一块点了就换过去）
+
+func _clear_board_pick_overlay() -> void:
+	if _pick_layer != null and is_instance_valid(_pick_layer):
+		_pick_layer.queue_free()
+	_pick_layer = null
+	_pick_hint = null
+	_pick_btns.clear()
+
 ## 房主重置按钮 / R 键：仅房主可发起，广播给双方
 func _on_reset_pressed() -> void:
 	if game_mode == ONLINE:
 		if not _is_net_server():
 			print("只有房主可以重置对局")
+			return
+		# ★ 2026-11-03：准备 / 选盘阶段没有"重开"可言 —— 那时盘还没定（抽签之后才换盘），
+		#   放行的话房主一按 R 就把加入方的盘面清了一遍，而选盘结束还会再换一次盘
+		#   （两端各清一次，谁都说不清"这一局是从哪一刻开始的"）。
+		if _net_phase != "playing":
 			return
 		# 随机盘联机不换盘（见 _regen_on_restart）：这里只广播「清空重下」
 		_net_send_action({"type": "reset", "color": current_player})
@@ -21831,6 +25012,17 @@ func _rg_click(p: Vector2) -> void:
 	_on_area_input(get_viewport(), ev, 0)
 
 
+## 自检专用的**记录桩通道**：把 `send_message()` 收到的消息攒起来，不发任何东西。
+## ★ 为什么要它：判据若只调 `_normalize_net_action()` 看返回值，就测不到"**广播出去的那一份**
+##   是不是归一化后的" —— 那正好是最容易静默坏的一处（见 `--readygate` ⑭）。
+## ★ 必须 `extends NetChannel`：`_chan` 的类型是基类，别处也只按基类契约用（`send_message`）。
+class _RecChan:
+	extends NetChannel
+	var sent: Array = []
+	func send_message(msg: Dictionary) -> void:
+		sent.append(msg)
+
+
 ## 自检（--readygate，2026-10-21）：联机「**双方都准备好了再进入对局**」的端到端闸。
 ## 用户口令原文：「然后一定要双方都准备好了再进入对局」。
 ##
@@ -21842,8 +25034,13 @@ func _rg_click(p: Vector2) -> void:
 ##     · 负对照（ready 档）  ：必须**一点没动** —— 这才是"闸真的挡住了"的证据。
 ##   只有负对照没有正对照 ⇒ "这条路本来就是死的"也全绿（等于没测）。
 ##
-## ★ 另一族（⑤⑥）测的是"**单方准备不许开局**"：`_ready_set` 只记了一个色时，
-##   房主侧一次都不许进 playing。⑦⑧ 测座位：映射三档 + 房主执白时下发/校验的口径。
+## ★ 另一族（⑤⑥）测的是"**单方准备不许前进 / 双方齐了只到选盘那一档**"：`_ready_set` 只记了
+##   一个色时一次都不许往下走；⑦⑧⑨ 测座位：映射三档 + 房主执白时下发/校验的口径。
+## ★ 2026-11-03 新增（联机选盘）：⑩ 抽签只落在双方各选的两张里、⑪ 只选一方不许开局
+##   （非法盘 id 也不许凑数）、⑫ 加入方同样要进入选盘阶段、⑬ 「随机」哨兵归一化成具体
+##   启用盘、⑭**广播出去的那一份**必须是具体 id（哨兵原样进通道 = 加入方自己再掷一次 =
+##   两端抽签不同 = 对局从第一手就分叉）。为什么这些放在这里而不是 `--netboardtest`：
+##   它们量的是**阶段机与协议**，而 `--netboardtest` 量的是"换盘本身对不对"（§101）。
 func _ready_gate_self_test() -> void:
 	print("[readygate] ===== 联机准备闸（双方都准备好才开局）=====")
 	var checks: Array = []
@@ -21862,6 +25059,8 @@ func _ready_gate_self_test() -> void:
 		"passes": passes, "bp": black_prisoners, "wp": white_prisoners,
 		"superko": _superko_hist.duplicate(), "seat": GameConfig.seat_choice,
 		"place_anims": _place_anims.duplicate(), "capture_anims": _capture_anims.duplicate(),
+		"board_pick": _board_pick.duplicate(), "board_chosen": _net_board_chosen,
+		"sized_tier": _sized_tier,
 	}
 	game_mode = ONLINE
 	_is_host = true
@@ -21956,18 +25155,194 @@ func _ready_gate_self_test() -> void:
 					str(not awaiting_after and not over_after),
 					str(awaiting_after), str(over_after)]])
 
-	# ---- ⑤ 单方准备不许开局 ----
+	# ---- ⑤ 单方准备不许进下一阶段 ----
 	_net_phase = "ready"
 	_ready_set = {}
 	_on_ready(Stone.BLACK)
 	var one_side: String = _net_phase
-	# ---- ⑥ 双方都准备 → 房主侧开局的唯一写点 `_host_start_game()` 被调到 ----
+	# ---- ⑥ 双方都准备 → **且只到「各选一张」这一档**，不直接开局 ----
+	# ★ 2026-11-03 口径变更（用户口令「先确认两个人之后，每个人各选一张图……」）：
+	#   改前这里断的是 phase == playing（准备齐了直接开局）。现在中间多了一档 `picking`，
+	#   断"必须停在 picking"才是对的 —— 断 playing 的话，**选盘整个环节被跳过**也照样绿。
 	_on_ready(Stone.WHITE)
 	var both_side: String = _net_phase
-	checks.append(["⑤ 只有一方准备时不开局｜`_ready_set` 只有一个色，phase 必须仍是 ready",
+	checks.append(["⑤ 只有一方准备时不前进｜phase 必须仍是 ready",
 			one_side == "ready", "一方准备后 phase=%s（期望 ready）" % one_side])
-	checks.append(["⑥ 双方都准备后才开局｜房主侧 phase 转为 playing",
-			both_side == "playing", "两方准备后 phase=%s（期望 playing）" % both_side])
+	checks.append(["⑥ 双方都准备后先进「定格数档」｜不许跳过它直接选盘/开局",
+			both_side == "sizing", "两方准备后 phase=%s（期望 sizing）" % both_side])
+
+	# ---- ⑩ 抽签只在**双方各选的这两张**里 ----
+	# ★ 编号说明：下面 ⑦⑧⑨ 是**座位**那三条（2026-10-21 立的，`regress.sh` 的阴性对照表
+	#   按号引用它们）⇒ 新旧号**不许重排**，新增的按 ⑩⑪ 往后接，物理位置放在这里就近可读。
+	# ★ 判据口径：不许写成"抽中的等于某一张常量" —— 那对"恒返回黑方选的那张"全绿，
+	#   而它恰好就是"随机没生效"的样子。⇒ 64 次里**两个值都必须出现**，
+	#   且**一个第三值都不许出现**（`_draw_net_board()` 退化成一个固定 id 时两头都会红）。
+	_net_phase = "picking"
+	_board_pick = {Stone.BLACK: GameConfig.BOARD_SNOWFLAKE,
+		Stone.WHITE: GameConfig.BOARD_KITE}
+	var draw_bad: Array[String] = []
+	var saw_a := 0
+	var saw_b2 := 0
+	for i in range(64):
+		var d: int = _draw_net_board()
+		if d == GameConfig.BOARD_SNOWFLAKE:
+			saw_a += 1
+		elif d == GameConfig.BOARD_KITE:
+			saw_b2 += 1
+		else:
+			draw_bad.append(str(d))
+	if saw_a == 0 or saw_b2 == 0:
+		draw_bad.append("只出现一侧：雪花%d / 筝形%d" % [saw_a, saw_b2])
+	# 两边选同一张 ⇒ 就是它（不许退化成"另一张"或乱掷）
+	_board_pick = {Stone.BLACK: GameConfig.BOARD_HAT, Stone.WHITE: GameConfig.BOARD_HAT}
+	var same: int = _draw_net_board()
+	if same != GameConfig.BOARD_HAT:
+		draw_bad.append("同选爱因斯坦却抽出 %d" % same)
+	checks.append(["⑩ 抽签只在双方各选的两张里｜两值都要出现、同选必须就是它",
+			draw_bad.is_empty(),
+			"；".join(draw_bad) if not draw_bad.is_empty()
+					else "雪花%d / 筝形%d / 同选→爱因斯坦" % [saw_a, saw_b2]])
+
+	# ---- ⑪ 只选了一方时**不许开局** ----
+	# ★ 与 ⑥ 是两件事，必须拆条（§101）：⑥ 管"准备齐了进哪一档"，⑧ 管"选盘不齐不许开局"。
+	#   合成一条时抓不到"选盘阶段把 `_host_start_game()` 无条件调了一次"那种坏法。
+	_net_phase = "picking"
+	_board_pick = {}
+	_on_board_pick(Stone.BLACK, GameConfig.BOARD_PENROSE)
+	var after_one_pick: String = _net_phase
+	_on_board_pick(Stone.WHITE, -1)      # 非法 id：必须被丢，不许当成"另一方也选了"
+	var after_bad_pick: String = _net_phase
+	checks.append(["⑪ 只选了一方时不许开局｜非法盘 id 也不许凑成「都选好了」",
+			after_one_pick == "picking" and after_bad_pick == "picking",
+			"一方选后 phase=%s ｜ 非法 id 后 phase=%s（期望都 picking）" % [
+					after_one_pick, after_bad_pick]])
+
+	# ---- ⑫ 加入方同样要进入下一个阶段 ----
+	# ★ 这一条守的是"只在房主那侧进入下一阶段"那个坏法：加入方会**永远停在准备浮层**上，
+	#   而且不报错（它只是再也没往下走）。本自检全程是房主视角 ⇒ 必须显式切成加入方再量一次。
+	#   ★ 2026-11-03 口径：双方准备齐后进的是 `sizing`（格数档），不是 `picking`。
+	_is_host = false
+	_net_phase = "ready"
+	_ready_set = {}
+	_on_ready(Stone.BLACK)
+	_on_ready(Stone.WHITE)
+	var client_side: String = _net_phase
+	# ★ "谁能定格数档"由 ⑮ 用**正负成对**的方式单独量（多面须拆条，§101）——
+	#   在这里顺手断一条会被"发错人"那道闸先拦下，红的理由根本不是被测物。
+	_is_host = true
+	checks.append(["⑫ 加入方同样要进入「定格数档」｜只在房主那侧进入会让人永远停在准备浮层",
+			client_side == "sizing", "加入方两侧就绪后 phase=%s（期望 sizing）" % client_side])
+
+	# ---- ⑬ 「随机」哨兵必须归一化成**具体启用盘** ----
+	# ★ 正负成对：哨兵要变；**具体 id 与非选盘动作必须逐键不变**（归一化对它们是恒等变换）。
+	#   少了后半段，一个"把所有动作的 board 都改写一遍"的实现也能全绿。
+	# ★ 还量一件事：**源字典不许被就地改写** —— 那是"顺手改调用方的数据"，
+	#   广播/回放都会跟着变（典型症状是房主那份 action 与日志对不上）。
+	var norm_src: Dictionary = {"type": "board_pick", "color": Stone.BLACK,
+		"board": NET_PICK_RANDOM}
+	var norm_out: Dictionary = _normalize_net_action(norm_src)
+	var rolled: int = int(norm_out.get("board", -1))
+	var norm_bad: Array[String] = []
+	if rolled == NET_PICK_RANDOM:
+		norm_bad.append("哨兵没被换掉")
+	# 抽出来必须是**真盘型**（`board_ids()` 里的一员）——占位/已下线编号都不许出现。
+	if not MenuModel.board_id_valid(rolled):
+		norm_bad.append("换成非启用盘 %d" % rolled)
+	if int(norm_src.get("board", 0)) != NET_PICK_RANDOM:
+		norm_bad.append("源字典被就地改写")
+	var keep: Dictionary = {"type": "board_pick", "color": Stone.WHITE,
+		"board": GameConfig.BOARD_KITE}
+	var keep_out: Dictionary = _normalize_net_action(keep)
+	if keep_out.size() != keep.size() or int(keep_out.get("board", -1)) != GameConfig.BOARD_KITE:
+		norm_bad.append("具体 id 被改动了 → %s" % str(keep_out))
+	var other: Dictionary = {"type": "place", "color": Stone.BLACK, "tile": 3}
+	var other_out: Dictionary = _normalize_net_action(other)
+	if other_out.size() != other.size() or int(other_out.get("tile", -1)) != 3:
+		norm_bad.append("非选盘动作被改动了 → %s" % str(other_out))
+	checks.append(["⑬ 「随机」归一化成具体启用盘｜具体 id 与非选盘动作必须逐键不变",
+			norm_bad.is_empty(),
+			"；".join(norm_bad) if not norm_bad.is_empty()
+					else "哨兵 → %s（启用盘）｜具体 id 与非选盘动作不变" % MenuModel.board_label(rolled)])
+
+	# ---- ⑭ 房主**广播出去的那一份**必须是具体盘 id ----
+	# ★ 这一条最有牙齿：哨兵若原样进通道，加入方会自己再掷一次 ⇒ 两端记下两张不同的盘 ⇒
+	#   抽签结果各异、对局从第一手就分叉，而且**一条错都不报**。
+	# ★ 量的是"真的进了通道的 action"（记录桩），不是 `_normalize_net_action()` 的返回值。
+	var rec_chan := _RecChan.new()
+	add_child(rec_chan)
+	var chan_bak: NetChannel = _chan
+	_chan = rec_chan
+	_net_connected = true
+	_is_host = true
+	_net_phase = "picking"
+	_board_pick = {}
+	_net_send_action({"type": "board_pick", "color": Stone.BLACK, "board": NET_PICK_RANDOM})
+	var sent_board: int = -1
+	if rec_chan.sent.size() > 0:
+		var sent_msg: Dictionary = rec_chan.sent[0]
+		sent_board = int((sent_msg.get("action", {}) as Dictionary).get("board", -1))
+	_chan = chan_bak
+	rec_chan.queue_free()
+	checks.append(["⑭ 房主广播的是具体盘 id 不是「随机」哨兵｜否则加入方会自己再掷一次",
+			sent_board != NET_PICK_RANDOM and MenuModel.board_id_valid(sent_board),
+			"通道里 board=%d（哨兵=%d）｜本地记下=%s" % [sent_board, NET_PICK_RANDOM,
+					str(_board_pick)]])
+
+	# ---- ⑮ 房主点档 ⇒ 记档 + 进选盘；只有房主能定格数档 ----
+	# ★ 正负成对（§127）：
+	#   正 = 房主发 size_pick 必须**被放行**（一个"一律拒收"的实现过不了这一半）；
+	#   负 = 加入方发同一条必须**被拒**（两人各定一档 ⇒ 两端盘面大小对不上 ⇒ 下不成同一张盘）。
+	# ⚠️ 负对照的 sender 必须取 `_peer_of_color()` 给出的**归属合法**那个 peer ——
+	#   随便填一个 peer 会先被"发错人"那道闸拦下，红的理由就不是被测物（自检骗自己）。
+	_is_host = true
+	_net_color = Stone.BLACK
+	_peer_white = 2
+	var host_size_ok: bool = _validate_action(
+		{"type": "size_pick", "color": _net_color, "tier": 2}, 1)
+	var guest_size_ok: bool = _validate_action(
+		{"type": "size_pick", "color": Stone.WHITE, "tier": 2}, 2)
+	_net_phase = "sizing"
+	_sized_tier = -1
+	_on_size_tier_pressed(2)          # 真实入口：按钮回调 → `_net_send_action` → 应用 + 广播
+	var tier_after: int = _sized_tier
+	var phase_after: String = _net_phase
+	checks.append(["⑮ 房主点档 ⇒ 记档并进选盘｜加入方改包发 size_pick 必须被拒",
+			host_size_ok and not guest_size_ok and tier_after == 2 and phase_after == "picking",
+			"房主发通过=%s｜加入方发通过=%s（期望 false）｜点「大」后 tier=%d phase=%s" % [
+					str(host_size_ok), str(guest_size_ok), tier_after, phase_after]])
+
+	# ---- ⑯ 格数档表必须覆盖 5 盘 × 3 档，且每张盘三档格数**严格递增** ----
+	# ★ 这是"表当真源"的最低要求：三档枚举必须是 SMALL/STANDARD/ENHANCED 各一次、
+	#   格数带逐档升高且**互不重叠**。**实测格数**由 `--netboardtest` ⑧ 逐一核对 ——
+	#   那条才是牙齿，这条只保证表自己内部自洽。
+	# ★★ 2026-11-06 改口径：表里不再有 per-board `spec`（阶梯搬回 `_apply_board_size()`），
+	#   所以这里不再按 5 盘 × 3 档数项，改判**三档自身的结构**：
+	#     ① 档数恰好 3、枚举恰好是 SMALL/STANDARD/ENHANCED 且不重复（漏一档会静默退化）；
+	#     ② 格数带 `lo<hi` 且逐档升高、相邻带**不重叠**（重叠 ⇒ "小"与"中"可能是同一张盘）。
+	var tier_bad: Array[String] = []
+	var want_sizes: Array = [GameConfig.SMALL, GameConfig.STANDARD, GameConfig.ENHANCED]
+	if SIZE_TIERS.size() != 3:
+		tier_bad.append("档数 %d（应恰好 3）" % SIZE_TIERS.size())
+	var seen_sizes: Array = []
+	var prev_hi := -1
+	for t in SIZE_TIERS.size():
+		var sz: int = int(SIZE_TIERS[t]["size"])
+		var rg: Array = SIZE_TIERS[t]["range"]
+		if seen_sizes.has(sz) or not want_sizes.has(sz):
+			tier_bad.append("第 %d 档枚举=%d（重复或不在 %s 内）" % [t, sz, str(want_sizes)])
+		seen_sizes.append(sz)
+		if rg.size() != 2 or int(rg[0]) >= int(rg[1]):
+			tier_bad.append("第 %d 档格数带 %s 非法" % [t, str(rg)])
+			continue
+		if int(rg[0]) <= prev_hi:
+			tier_bad.append("第 %d 档格数带 %s 与上一档重叠（上档上界 %d）" % [t, str(rg), prev_hi])
+		prev_hi = int(rg[1])
+	checks.append(["⑯ 格数档表三档结构自洽｜枚举不重不漏、格数带逐档升高且互不重叠",
+			tier_bad.is_empty(),
+			"；".join(tier_bad) if not tier_bad.is_empty()
+					else "三档枚举 %s ｜格数带 %s / %s / %s" % [str(seen_sizes),
+							str(SIZE_TIERS[0]["range"]), str(SIZE_TIERS[1]["range"]),
+							str(SIZE_TIERS[2]["range"])]])
 
 	# ---- ⑦ 座位 → 房主执色映射（三档） ----
 	var seat_ok := true
@@ -22045,6 +25420,13 @@ func _ready_gate_self_test() -> void:
 	GameConfig.seat_choice = int(sv["seat"])
 	_place_anims = sv["place_anims"]
 	_capture_anims = sv["capture_anims"]
+	# 选盘阶段建的覆盖层必须拆掉（⑥ 会真的走到 `_enter_board_pick()`）：
+	# 留着的后果是一层"各选一张棋盘"面板压在本自检后面的任何截图/判据上。
+	_clear_size_tier_overlay()
+	_clear_board_pick_overlay()
+	_board_pick = sv["board_pick"]
+	_net_board_chosen = int(sv["board_chosen"])
+	_sized_tier = int(sv["sized_tier"])
 	_update_hud()
 	queue_redraw()
 
@@ -22060,18 +25442,254 @@ func _ready_gate_self_test() -> void:
 	get_tree().quit()
 
 
-## 自检（--emotetest，2026-10-21）：快捷表情 + 联机身份条。
+## 自检（--netboardtest，2026-11-03）：**运行期换盘**（`_apply_net_board()`）。
 ##
-## ★ 不需要 Steam：全部判据走**本地可复现**的链路 —— 表情消息入口 / 气泡状态 / 真实绘制计数 /
-##   身份条可见性与几何。头像"真的从 Steam 拿到图"那一条在 `--steamtest`（需要真 Steam）。
+## ★ 为什么必须有这一条：联机「双方各选一张 → 随机抽一张」要求房主在**场景早就建好之后**
+##   把整张盘换掉（几何 / 邻接 / 盘型标记 / 谱头 全重来）。这条路径平时**只有真对局才会走到**
+##   （本机两个 Steam 账号做不到），而它的坏法全是静默的：换了一半（`tiles` 换了、
+##   `tile_centers` 没换）当场不报错，只有玩家点了格才发现"画的位置和落子的位置不一样"。
+##   `--aibud` 也运行期换盘，但它换完就 quit、且**不调** `_adapt_to_screen()`，
+##   覆盖不到"换完还得能正常下"这一半。
+##
+## ★ 判据全部量**可观测结果**（尺寸/标记/空格数/谱头/种子），不量"函数被调用了"。
+func _net_board_self_test() -> void:
+	print("[netboardtest] ===== 运行期换盘（联机各选一张随机抽）=====")
+	var checks: Array = []
+	var sv_seed: int = _rand_seed
+	# ---- ① 换到雪花（随机档）：整族几何必须一起换 ----
+	GameConfig.board_size = GameConfig.RANDOM
+	_apply_net_board(GameConfig.BOARD_SNOWFLAKE)
+	var n: int = tiles.size()
+	checks.append(["① 换盘后几何整族同尺寸｜tiles / board / adjacency / tile_centers 一起换",
+			n > 0 and board.size() == n and adjacency.size() == n and tile_centers.size() == n,
+			"tiles=%d board=%d adjacency=%d centers=%d" % [
+					n, board.size(), adjacency.size(), tile_centers.size()]])
+	# ---- ② 盘型标记互斥（"只换一半"的典型症状：`_is_snow` 真、`_is_hat` 还留着）----
+	checks.append(["② 盘型标记互斥｜雪花盘只许 _is_snow 为真",
+			_is_snow and not _is_cube and not _is_kite and not _is_hat,
+			"snow=%s cube=%s kite=%s hat=%s" % [str(_is_snow), str(_is_cube),
+					str(_is_kite), str(_is_hat)]])
+	# ---- ③ 换盘后必须是"空的新局" ----
+	var empties := 0
+	for vid in board.keys():
+		if board[vid] == Stone.EMPTY:
+			empties += 1
+	checks.append(["③ 换盘后是空的新局｜每格都空、黑先、passes=0、未终局",
+			empties == n and current_player == Stone.BLACK and passes == 0 and not game_over,
+			"空格 %d/%d current_player=%d passes=%d game_over=%s" % [
+					empties, n, current_player, passes, str(game_over)]])
+	# ---- ④ 谱头必须写新房型（`_record_begin()` 读 `GameConfig`）----
+	var rec_bt: int = int(_record.get("board_type", -1))
+	checks.append(["④ 谱头跟着换盘｜_record 的盘型必须等于 GameConfig.board_type",
+			rec_bt == GameConfig.BOARD_SNOWFLAKE,
+			"谱头=%d（期望 %d）" % [rec_bt, GameConfig.BOARD_SNOWFLAKE]])
+	# ---- ⑤ 爱因斯坦也吃三档｜不许被"它的大小由种类决定"那条老规则吞掉 ----
+	# ★ 2026-11-03 之前这里是 `if bid == HAT: board_size = RANDOM`。三档表已经把爱因斯坦写清
+	#   （小 150 / 中 270±12 / 大 310）⇒ 再补那一句的后果是**大档静默变成中档**
+	#   （永远造 270 格的盘），三档在爱因斯坦上等于只有一档，而玩家看不出任何异常。
+	_sized_tier = 2
+	_apply_net_board(GameConfig.BOARD_HAT)
+	var hat_big: int = tiles.size()
+	var hat_size_enum: int = GameConfig.board_size
+	_sized_tier = 0
+	_apply_net_board(GameConfig.BOARD_HAT)
+	var hat_small: int = tiles.size()
+	checks.append(["⑤ 爱因斯坦也吃三档｜大档与小档必须真的差一大截，不许退化成同一档",
+			hat_size_enum == GameConfig.ENHANCED and hat_big > hat_small + 100,
+			"大档 %d 格（size=%d 期望 %d）｜小档 %d 格" % [
+					hat_big, hat_size_enum, GameConfig.ENHANCED, hat_small]])
+	# ---- ⑥ 换盘必须重抽种子 ----
+	#   ★ 先手动钉一颗**非 0** 的旧种子再换盘：从 0 起步的话，"压根没重抽"与
+	#     "重抽到了 0" 分不开（0 在本工程是"未指定"的哨兵），判据会变成瞎的。
+	#   ★ 2026-11-06 起三档**全是固定几何**（"随机档"已从尺寸栏移出），重抽种子仍然是必需的 ——
+	#     爱因斯坦的选片、以及将来任何吃种子的生成器都要靠它"每局一张新盘"。
+	_sized_tier = 1
+	_rand_seed = 424242
+	_apply_net_board(GameConfig.BOARD_PENROSE)
+	var seed_new: int = _rand_seed
+	checks.append(["⑥ 随机档换盘会重抽种子｜两局不许共用同一颗种子",
+			seed_new != 424242 and seed_new > 0,
+			"钉的旧种子=424242 新种子=%d" % seed_new])
+	# ---- ⑦ 换盘**不许往棋谱库塞空谱** ----
+	#   ★ 2026-11-03 立过又删：原判据量"换盘前后棋谱目录条数不变"，而**阴性对照证明它是恒真式**
+	#     —— 把 `_apply_net_board()` 里那条"清空 0 手谱"的守卫整段拆掉，条数照样不变
+	#     （真正挡在前面的是 `GameRecord.mark_interrupted()`：它对 0 手谱直接 return）。
+	#   ⇒ 守卫与判据一起撤（判据要有牙齿：拆掉被测物必须红）。换盘后**是不是新谱头**由 ④ 守。
+	# ⚰️ 2026-11-03 立过又删：「换盘后棋盘重新适配居中」（原定编号 ⑦，**号不复用**）。
+	#   阴性对照证明它**没牙齿**：把 `_adapt_to_screen()` 整行拆掉，盘心偏差只从 0.0 px 变到
+	#   6.1 px（各 `generate_*()` 自己就按视口居中缩放，`_adapt_to_screen()` 只再收一遍边距）。
+	#   ⇒ 判据量不到被测物，按本工程口径不留在清单里。
+	# ---- ⑧ 格数档契约：5 张盘 × 3 档，实测格数必须落在各档区间且逐档拉开 ----
+	# ★ 为什么这条最有价值：用户的要求是"格数决定对局时长，开局前先定三档"——
+	#   那么"这三档到底是几格"就**不能只是注释**，必须是可执行的契约。
+	# ★★ 2026-11-05 改口径（原为"实测必须等于表里写的那个数"）：帽子盘引入**削峰**之后
+	#   实际格数比 export 目标少 6~11%（`--hatpeaktest` ①：抠点 8.9%）⇒ 精确等值口径
+	#   会随生成器的每次调参而红，而那种红**不代表三档坏了**（§71 先疑判据口径）。
+	#   新口径守三件**用户真正要的**事：
+	#     ① 每档实测落在该档的格数区间（跨盘型通用：小 70~190 / 中 155~285 / 大 275~400）；
+	#     ② 同一张盘三档**逐档至少大 12%**（不然"小/中/大"名不副实）；
+	#     ③ 实测与 `target`（设计目标）偏差 ≤25%（防止表与实现彻底走散）。
+	#   `target` 只作对照打印 —— 它是 export 的目标值，不是判据的期望值。
+	# ---- ⑧ 格数档契约：5 张盘 × 3 档，实测格数必须落在各档格数带且逐档拉开 ----
+	# ★ 为什么这条最有价值：用户的要求是"格数决定对局时长，开局前先定三档"——
+	#   那么"这三档到底是几格"就**不能只是注释**，必须是可执行的契约。
+	# ★★ 2026-11-06 三度改口径（这一条的期望值来源换过三次，别再来第四次）：
+	#   ① 最初「实测必须等于表里写的那个数」⇒ 帽子盘加削峰后必然红；
+	#   ② 11-05 改成「实测与 target 偏差 ≤25%」⇒ target 与实测本就是同一个变量的两次抄写，
+	#      换个说法仍是等值口径，而且把 per-board 覆盖参数逼进了表里（两份真相）；
+	#   ③ **现在**：期望值 = 各档的**格数带**（`range`），它是"这一档该有几格"的
+	#      人类可读契约（9×9/13×13/19×19 就近能到的那一圈），与 target 解耦。守三件事：
+	#        ① 每档实测落在该档格数带内（带互不重叠 ⇒ 落错档当场红）；
+	#        ② 同一张盘三档逐档至少大 25%（"小/中/大"名不副实就红）；
+	#        ③ 参照值 = 该档的**设计对标格数**（81/169/361），只作打印对照，不参与判定。
+	#   ★ 分母：`board_ids()` 五张盘型（9 个选项去重 —— 彭罗斯/立方体/雪花/爱因斯坦 各有
+	#     固定+随机两项，筝形只有固定一项）。这里量的是**固定几何**的阶梯，
+	#     而 `_apply_net_board()` 会显式清零 `board_random_shape`（联机一律固定形状）
+	#     ⇒ 量到的必然是档位表里的固定几何，不会混进随机生成器的种子抖动。
+	var tier_bad: Array[String] = []
+	var tier_rows: Array[String] = []
+	# 设计对标格数（= 9×9 / 13×13 / 19×19），只用于打印偏差
+	var nominal: Array = [81, 169, 361]
+	for k in MenuModel.board_ids():
+		var bid: int = int(k)
+		var prev: int = -1
+		var got_txt: Array[String] = []
+		var dev_txt: Array[String] = []
+		for t in SIZE_TIERS.size():
+			_sized_tier = t
+			_apply_net_board(bid)
+			var got: int = tiles.size()
+			var rng: Array = _size_tier_range(t)
+			got_txt.append(str(got))
+			var nm: int = int(nominal[t]) if t < nominal.size() else got
+			dev_txt.append("%+d%%" % int(round(100.0 * float(got - nm) / float(maxi(1, nm)))))
+			if got < int(rng[0]) or got > int(rng[1]):
+				tier_bad.append("%s%s 实测 %d 不在 %d~%d" % [str(SIZE_TIERS[t]["label"]),
+						MenuModel.board_label(bid), got, int(rng[0]), int(rng[1])])
+			if prev > 0 and float(got) < float(prev) * SIZE_TIER_MIN_STEP:
+				tier_bad.append("%s 第%d档 %d 没比上一档 %d 大 %d 个百分点以上" % [
+						MenuModel.board_label(bid), t, got, prev,
+						int((SIZE_TIER_MIN_STEP - 1.0) * 100.0)])
+			prev = got
+		tier_rows.append("%s %s（vs %s）" % [MenuModel.board_label(bid),
+				"/".join(got_txt), "/".join(dev_txt)])
+	checks.append(["⑧ 格数档契约｜每盘三档落在各档格数带 · 逐档至少拉开 25 个百分点",
+			tier_bad.is_empty(),
+			"；".join(tier_bad) if not tier_bad.is_empty() else " · ".join(tier_rows)])
+	# ---- ⑨ 棋盘「XX随机」：格数必须**跟档位走**，不是老口径的 ~200 ----
+	# ★★ 这是本轮新功能的牙齿（用户口令「把棋盘和该棋盘的随机模式拆成两个棋盘选项」+
+	#   追问裁决「仍吃大小三档（随机只换形状）」）。两种坏法都静默：
+	#     ① 忘了把档位目标传下去（`_rand_target_override` 没人写）⇒ 随机盘永远 ≈200 格，
+	#        小档也是 200 格 ⇒ 「格数决定对局时长」这条口径被悄悄废掉；
+	#     ② 某张盘的随机分支没接上统一目标（四个生成器各写一份）⇒ 只有那张盘不跟档。
+	#   ⇒ 逐盘实测**小档**格数，必须落在小档格数带里（老口径 200 会当场红）。
+	#   ★ 分母：四张有随机版的盘（筝形没有随机形状生成器，`BOARD_KINDS` 里也就没有那一项）。
+	var rs_bad: Array[String] = []
+	var rs_rows: Array[String] = []
+	var rs_small_range: Array = _size_tier_range(0)
+	for bid2 in [GameConfig.BOARD_PENROSE, GameConfig.BOARD_CUBE,
+			GameConfig.BOARD_SNOWFLAKE, GameConfig.BOARD_HAT]:
+		GameConfig.board_type = bid2
+		GameConfig.board_random_shape = true
+		_sized_tier = 0
+		_apply_size_tier(0)                       # 写档位 + `_rand_target_override`
+		_rand_seed = _fresh_seed()
+		generate_board()
+		var got2: int = tiles.size()
+		rs_rows.append("%s %d" % [MenuModel.board_label(bid2), got2])
+		if got2 < int(rs_small_range[0]) or got2 > int(rs_small_range[1]):
+			rs_bad.append("%s随机小档 %d 不在 %d~%d" % [MenuModel.board_label(bid2), got2,
+					int(rs_small_range[0]), int(rs_small_range[1])])
+		if bid2 == GameConfig.BOARD_KITE and _is_random_board():
+			rs_bad.append("筝形不该有随机形状（生成器不存在）")
+	checks.append(["⑨ 随机形状吃档位格数｜四张盘的小档随机盘必须落在小档格数带内",
+			rs_bad.is_empty() and rs_rows.size() == 4,
+			"；".join(rs_bad) if not rs_bad.is_empty() else " · ".join(rs_rows)])
+
+	# ---- ⑩ 随机形状：换种子必须换形状，且同种子必须可复现 ----
+	# ★ 三面成对（少任何一面都能被"永远固定"或"永远随机"的实现骗过去）：
+	#   ① 同 seed 两次 ⇒ 几何摘要**相同**（复盘靠这条：谱里只存 seed）；
+	#   ② 换 seed ⇒ 摘要**不同**（证明它真的在换形状）；
+	#   ③ 关掉随机（固定几何）⇒ 换 seed 摘要**不变**（证明"随机的来源"就是这根轴，
+	#      而不是别的什么在抖 —— 彭罗斯固定盘不吃种子，这是它的既有性质）。
+	# ★ 摘要用「格数 + 顶点数 + 度分布」，不用 `_board_fingerprint()`：后者编进了 seed，
+	#   拿它比 ① 必然不同 ⇒ 判据成了永假式（§70 判据不许重实现被测逻辑，也同理）。
+	var geom_digest := func() -> String:
+		return "%d|%d|%s" % [tiles.size(), vertices.size(), _degree_hist_txt()]
+	GameConfig.board_type = GameConfig.BOARD_PENROSE
+	GameConfig.board_random_shape = true
+	_sized_tier = 1
+	_apply_size_tier(1)
+	_rand_seed = 20261106
+	generate_board()
+	var g_a: String = geom_digest.call()
+	generate_board()                              # 同 seed 再来一次
+	var g_a2: String = geom_digest.call()
+	_rand_seed = 20261107
+	generate_board()
+	var g_b: String = geom_digest.call()
+	GameConfig.board_random_shape = false
+	_apply_size_tier(1)
+	_rand_seed = 20261106
+	generate_board()
+	var g_fix_a: String = geom_digest.call()
+	_rand_seed = 20261107
+	generate_board()
+	var g_fix_b: String = geom_digest.call()
+	var seed_repro: bool = g_a == g_a2
+	var seed_matters: bool = g_a != g_b
+	var fixed_ignores_seed: bool = g_fix_a == g_fix_b
+	var rs10_bad: Array[String] = []
+	if not seed_repro:
+		rs10_bad.append("同种子生成两次形状不同（复盘会重放出另一张盘）")
+	if not seed_matters:
+		rs10_bad.append("换种子形状不变（随机形状没生效）")
+	if not fixed_ignores_seed:
+		rs10_bad.append("固定几何换种子形状变了（说明随机不是这根轴带来的）")
+	checks.append(["⑩ 随机形状换种子换形状 · 同种子可复现｜固定几何必须不吃种子",
+			rs10_bad.is_empty(),
+			"；".join(rs10_bad) if not rs10_bad.is_empty()
+					else "同种子一致=%s｜换种子变了=%s｜固定盘不吃种子=%s（%s → %s）" % [
+							str(seed_repro), str(seed_matters), str(fixed_ignores_seed),
+							g_a, g_b]])
+	# 复原：随机轴关掉（后面的判据/还原路径都按"固定几何"跑）
+	GameConfig.board_random_shape = false
+
+	# 复原：种子还回去（盘面已换，本自检到此 quit，不需要还原几何）
+	_rand_seed = sv_seed
+	var failed: Array = []
+	for c in checks:
+		var okc: bool = (c[1] is bool) and (c[1] as bool)
+		if not okc:
+			failed.append(str(c[0]))
+		print("[netboardtest] %s %s（%s）" % [c[0], "✓" if okc else "✗", c[2]])
+	print("[netboardtest] 判据 %d 条，失败 %d 条%s" % [checks.size(), failed.size(),
+			"" if failed.is_empty() else "：" + ", ".join(failed)])
+	print("[netboardtest] 结论：", "通过 ✓" if failed.is_empty() and checks.size() > 0 else "失败 ✗")
+	get_tree().quit()
+
+## 自检（--idtest，2026-10-21；★ 2026-11-02 由 `--emotetest` 改名）：左抽屉身份条。
+##
+## ★ 不需要 Steam：全部判据走**本地可复现**的链路 —— 抽屉可见性 / 身份槽真实矩形 /
+##   头像占位 / 真实绘制计数 / 棋盘居中。头像"真的从 Steam 拿到图"那一条在 `--steamtest`。
 ##
 ## ★ 为什么每条都选"可观测结果"而不是"中间量"（本工程 §110 / §127）：
-##   · ③ 测 `send_emote()` 之后**本地气泡状态变了**，不是"按钮连了信号"；
-##   · ⑨ 测 `draw` 信号**真的被调用了几次**，不是"绘制函数存在"（函数在但没人画 = 全绿是假象）；
-##   · ⑩ 两种 `game_mode` 各量一次，正 / 负成对 —— 只测"联机时可见"的话，
+##   · ⑬ 测 `identity` 的 draw 信号**真的被调用了几次**，不是"绘制函数存在"
+##     （函数在但没人画 = 全绿是假象）；
+##   · ⑩ 三种 `game_mode` 各量一次 + 折叠负对照，正 / 负成对 —— 只测"某档可见"的话，
 ##     一个"恒可见"的实现也能全绿。
-func _emote_self_test() -> void:
-	print("[emotetest] ===== 快捷表情 + 联机身份条 =====")
+##
+## ⚰️ 2026-11-02 墓碑（名字不许回收）：本档原有 ①~⑨ 九条判据，全部围绕**快捷表情**
+##   （表情表完整 / 越界守卫 / 发送走真实入口 / 收端消息 / 脏消息 / 节流 / 到期停画 /
+##   淡出线性 / 8 格真进绘制）。用户口令「聊天里的表情功能就放弃了」⇒ 表情整套删除，
+##   这九条没有被测对象了。
+##   ★ 判据编号从 ⑩ 开始、前面的号**不复用**：历史上引用过"`--emotetest` ⑩"之类的记录，
+##     重编号会让那些记录指向别的东西（§113 改名连带面）。空号就是墓碑。
+##   ★ 也**不补**一条"表情确实没了"的判据：那种只能写成"grep 不到 Emotes"，
+##     而它会在任何人重新加回表情时红 —— 那是把墓碑变成锁，不是判断行为。
+##     删掉的东西不需要守卫，活着的东西才需要。
+func _identity_self_test() -> void:
+	print("[idtest] ===== 左抽屉身份条 =====")
 	var checks: Array = []
 	var sv := {
 		"game_mode": game_mode, "net_color": _net_color, "chan": _chan,
@@ -22084,150 +25702,34 @@ func _emote_self_test() -> void:
 	_net_color = Stone.BLACK
 	_net_connected = true
 	_net_phase = "playing"
-	_chan = null                    # 不连真通道：发送走 `is_live()` = false 的静默丢弃
+	# 不连真通道：本档量的是几何与可见性，不需要通道（⑮ 会自己切模式，靠"复原现场"收拾）。
+	_chan = null
 	_refresh_net_extras()
-
-	# ---- ① 表情表完整 ----
-	var names_ok: bool = Emotes.count() == 8
-	var seen: Dictionary = {}
-	var bad_name := ""
-	for i in range(Emotes.count()):
-		var nm := Emotes.name_of(i)
-		if nm == "":
-			names_ok = false
-			bad_name = "第 %d 个名字为空" % i
-		elif seen.has(nm):
-			names_ok = false
-			bad_name = "重名：" + nm
-		seen[nm] = true
-	checks.append(["① 表情表完整｜数量固定且名字非空互不重名",
-			names_ok, bad_name if bad_name != "" else "%d 个：%s" % [
-					Emotes.count(), ", ".join(Emotes.NAMES)]])
-
-	# ---- ② 越界表情号被唯一守卫挡掉 ----
-	var guard_ok: bool = (not Emotes.is_valid(-1)) \
-			and (not Emotes.is_valid(Emotes.count())) \
-			and Emotes.name_of(-1) == "" and Emotes.name_of(99) == ""
-	checks.append(["② 越界表情号一律非法｜-1 与 count 本身都不是合法值",
-			guard_ok, "is_valid(-1)=%s is_valid(%d)=%s" % [
-					str(Emotes.is_valid(-1)), Emotes.count(), str(Emotes.is_valid(Emotes.count()))]])
-
-	# ---- ③ 发送走真实入口 → 本地气泡立刻出现（call_local 语义）----
-	_emote_last_sent_ms = 0
-	_emote_bubble_idx[0] = -1
-	_emote_bubble_left[0] = 0.0
-	var sent1: bool = send_emote(2)
-	checks.append(["③ 发表情后自己这边立刻看见｜本地先放再发，不等对端回声",
-			sent1 and _emote_bubble_idx[0] == 2 and _emote_bubble_left[0] > 0.0,
-			"send=%s idx=%d 寿命=%.2f" % [str(sent1), _emote_bubble_idx[0], _emote_bubble_left[0]]])
-
-	# ---- ④ 收到对端消息 → 对端气泡（走真实消息分发）----
-	_on_relay_message({"m": "emote", "e": 3})
-	checks.append(["④ 收到对端表情消息后对端气泡出现｜走 _on_relay_message 分发",
-			_emote_bubble_idx[1] == 3 and _emote_bubble_left[1] > 0.0,
-			"对端 idx=%d（期望 3）寿命=%.2f" % [_emote_bubble_idx[1], _emote_bubble_left[1]]])
-
-	# ---- ⑤ 脏表情消息不改任何状态（唯一守卫在 _play_emote）----
-	#   ★ 先把状态清成"空"，再喂 99：不清的话 ④ 留下的 idx=3 会让"没变化"与"没被改"
-	#     长得一模一样（典型的假绿）。
-	_emote_bubble_idx[1] = -1
-	_emote_bubble_left[1] = 0.0
-	_on_relay_message({"m": "emote", "e": 99})
-	_on_relay_message({"m": "emote"})              # 连键都不带的畸形包
-	checks.append(["⑤ 越界与畸形表情消息不改任何状态｜入口不另写校验，唯一守卫在 _play_emote",
-			_emote_bubble_idx[1] == -1 and _emote_bubble_left[1] == 0.0,
-			"对端 idx=%d（期望 -1）寿命=%.2f（期望 0）" % [_emote_bubble_idx[1], _emote_bubble_left[1]]])
-
-	# ---- ⑥ 发送节流 ----
-	_emote_last_sent_ms = 0
-	var t1: bool = send_emote(1)
-	var t2: bool = send_emote(1)
-	checks.append(["⑥ 表情发送有节流｜%d 毫秒内连发只认第一条" % EMOTE_SEND_GAP_MS,
-			t1 and not t2, "第一次=%s 紧接着第二次=%s" % [str(t1), str(t2)]])
-
-	# ---- ⑦ 表情到期后**不再画**（状态清 + 绘制计数停涨，双证据）----
-	#   ★ 2026-10-22 改写：原来查的是 `_emote_self_bubble.visible`（那个节点已随气泡整套删除）。
-	#     现在表情画在身份槽里，只有"状态"没有"节点可见性"这种东西可查 ⇒ 改量两样：
-	#     ① `_emote_bubble_idx` 清回 -1、探针 `_last_emote_alpha` 归 0；
-	#     ② **绘制计数停涨** —— 只查 flag 会被"flag 清了但还在画"骗过（§110 的形态）。
-	_refresh_net_extras()          # 保证身份槽在树里且可见，否则根本不会重绘
-	_play_emote(0, 5)
-	_emote_bubble_left[0] = 0.1
-	await get_tree().process_frame
-	var paint_before: int = int(_draw_ticks.get("bubble", 0))
-	_tick_emote_bubbles(0.2)       # 寿命走完 ⇒ idx 清回 -1
-	_redraw_identity()
-	await get_tree().process_frame
-	var paint_after: int = int(_draw_ticks.get("bubble", 0))
-	var hidden_ok: bool = _emote_bubble_idx[0] == -1 \
-			and _last_emote_alpha[0] == 0.0 \
-			and paint_after == paint_before
-	checks.append(["⑦ 表情到期后头像上不再画｜状态清回 -1 且绘制计数停涨",
-			hidden_ok, "idx=%d 画出去的 alpha=%.2f 绘制 %d→%d" % [
-					_emote_bubble_idx[0], _last_emote_alpha[0], paint_before, paint_after]])
-
-	# ---- ⑧ 淡出按剩余寿命线性派生（不是"突然消失"，也不是"恒为满值"）----
-	#   ★ 断的是**函数关系**：`alpha == clamp(剩余 / 淡出段)`，取两组探针当场比。
-	#     不调 `emote_slot_alpha()` 算期望值（那是拿被测函数给自己当答案，§70）。
-	#   ★ 为什么不像第一版那样断言"alpha 精确等于 0.333"：自检里有 `await`，帧间
-	#     `_process → _tick_emote_bubbles()` 会再扣掉一两帧，精确值必然偏 ——
-	#     那种情况下唯一能做的"修法"就是放宽容差，而放宽容差就是掩盖。
-	#   ★ 另两条一起断：剩余必须落在**淡出段内**（< FADE）且 alpha < 0.9 ——
-	#     把"二值开关"（alive ? 1.0 : 0.0）改回来会同时违反这两条。
-	_play_emote(0, 1)
-	_emote_bubble_left[0] = 0.2
-	_tick_emote_bubbles(0.05)          # ⇒ 剩 0.15（落进淡出段）
-	_redraw_identity()
-	await get_tree().process_frame
-	var got_a: float = _last_emote_alpha[0]
-	var got_left: float = _last_emote_left[0]
-	var want_a: float = clampf(got_left / EMOTE_BUBBLE_FADE, 0.0, 1.0)
-	var fade_ok: bool = absf(got_a - want_a) < 0.001 \
-			and got_left > 0.0 and got_left < EMOTE_BUBBLE_FADE \
-			and got_a < 0.9
-	checks.append(["⑧ 表情淡出跟着剩余寿命走｜alpha 与剩余寿命的线性关系，不是二值开关",
-			fade_ok, "alpha=%.3f 由剩余 %.3f 推出（期望 %.3f）" % [got_a, got_left, want_a]])
-
-	# ---- ⑨ 8 个表情都真的被画出来（真实 draw 信号计数）----
-	#   ★ 这是本自检里唯一一条"看得见像素之外"的判据：`Emotes.draw_emote()` 是纯绘制代码，
-	#     headless 下没法回读像素，但 `draw` 信号**确实会触发**（CanvasItem 的 draw
-	#     与渲染后端无关）⇒ 靠计数证明"8 个都被送进绘制了"。
-	#   ★ 一条反例：如果只断言"Emotes.count()==8 且 draw_emote 存在"，那么把表情格
-	#     循环改成 `for i in range(3)` 也全绿 —— 计数断不住这种东西。
-	var tick0: int = int(_draw_ticks.get("emote_cell", 0))
-	var probes: Array[Control] = []
-	for i in range(Emotes.count()):
-		var probe := Control.new()
-		probe.name = "EmoteProbe%d" % i
-		probe.size = Vector2(48, 48)
-		probe.custom_minimum_size = Vector2(48, 48)
-		probe.draw.connect(_draw_emote_cell.bind(probe, i))
-		_emote_grid.add_child(probe)
-		probes.append(probe)
-	await get_tree().process_frame
-	await get_tree().process_frame
-	var drew: int = int(_draw_ticks.get("emote_cell", 0)) - tick0
-	checks.append(["⑨ 8 个表情都真的进了绘制｜靠 draw 信号的真实调用计数，不靠函数存在",
-			drew >= Emotes.count(), "两帧内 emote_cell 绘制 %d 次（期望 ≥ %d）" % [drew, Emotes.count()]])
-	for probe in probes:
-		probe.queue_free()
-
-	# ---- ⑩ 左抽屉（身份 + 表情）只在联机态可见（正负成对）----
+	# ---- ⑩ 左抽屉在**三档模式都**出现（2026-11-02 改了这条口径）----
+	#   ★ 原先钉的是"只在联机态可见"（那会儿单机下它不存在）。用户口令「单人模式下也加上
+	#     左抽屉」之后**口径变了就改判据、不许删**（§127 正负仍要成对）：
+	#     正例 = 联机 / 人机 / 本地三档各量一次；反例 = 折叠时面板必须不画
+	#     —— 否则"恒可见"完全可能只是没在测隐藏那一半。
+	#   ★ 面板问 `is_visible_in_tree()` 而不是 `visible`：它挂在 `_drawer_layer` 下面，
+	#     **父层藏起来时子节点的 `visible` 仍然是 true**（Godot 语义）。第一版写成 `.visible`
+	#     ⇒ 人机档那条恒假、"只在联机态出现"这条判据一半根本没在测。
+	var vis_modes: Array = []
+	for gm in [ONLINE, VS_AI, LOCAL]:
+		game_mode = gm
+		_refresh_net_extras()
+		await get_tree().process_frame
+		vis_modes.append(_drawer_layer.visible and _drawer_left_panel.is_visible_in_tree())
+	_drawer_left_open = false
+	_refit_drawers()
+	var vis_folded: bool = _drawer_left_panel.is_visible_in_tree()
+	_drawer_left_open = true
+	_refit_drawers()
 	game_mode = ONLINE
 	_refresh_net_extras()
-	# ★ 面板问 `is_visible_in_tree()` 而不是 `visible`：它挂在 `_drawer_layer` 下面，
-	#   **父层藏起来时子节点的 `visible` 仍然是 true**（Godot 语义）。第一版写成 `.visible`
-	#   ⇒ 人机档那条恒假、"只在联机态出现"这条判据一半根本没在测。
-	var vis_online: bool = _drawer_layer.visible and _drawer_left_panel.is_visible_in_tree()
-	game_mode = VS_AI
-	_refresh_net_extras()
-	var vis_offline: bool = (not _drawer_layer.visible) \
-			and (not _drawer_left_panel.is_visible_in_tree())
-	game_mode = ONLINE
-	_refresh_net_extras()
-	checks.append(["⑩ 左抽屉只在联机态出现｜身份槽与表情格两档各量一次，正负成对",
-			vis_online and vis_offline, "联机时可见=%s 人机时隐藏=%s" % [
-					str(vis_online), str(vis_offline)]])
+	checks.append(["⑩ 左抽屉在联机/人机/本地三档都出现｜折叠时必须不画 · 正负成对",
+			bool(vis_modes[0]) and bool(vis_modes[1]) and bool(vis_modes[2]) and not vis_folded,
+			"联机=%s 人机=%s 本地=%s ｜ 折叠时=%s" % [str(vis_modes[0]), str(vis_modes[1]),
+					str(vis_modes[2]), str(vis_folded)]])
 
 	# ---- ⑪ 两条身份槽完整落在左抽屉里（不是"落在视口内"）----
 	#   ★ 判据口径从"在视口内"收紧成"在左抽屉内容区内"：抽屉出现之后，只要它们跑到面板外面
@@ -22266,16 +25768,15 @@ func _emote_self_test() -> void:
 	checks.append(["⑬ 两条身份槽都真的画过｜identity 绘制计数 ≥ 2",
 			id_ticks >= 2, "identity 绘制 %d 次（期望 ≥ 2）" % id_ticks])
 
-	# ---- ⑭ 表情只画在头像圆里，那块区域到不了棋盘（用户口令：表情包不要遮挡棋盘）----
-	#   ★ 三个量一起断，缺一个都能骗过判据：
-	#     ① 两个槽的头像圆都完整落在左抽屉内容区内（表情就画在这个圆里）；
-	#     ② 头像圆与**棋盘盒**不相交（棋盘盒含盘的外扩，比顶点盒严 13px）；
-	#     ③ 探针证明表情**真的在画**（alpha > 0）—— 否则"一个表情都没有"也能让 ①② 全绿，
-	#        等于这条判据什么都没测（§106 有效分母为 0 须报红）。
-	_play_emote(0, 6)
-	_play_emote(1, 1)
-	_redraw_identity()
-	await get_tree().process_frame
+	# ---- ⑭ 头像圆不越出抽屉、也不碰棋盘 ----
+	#   ★ 2026-11-02 口径变更：原口径是"表情只画在头像圆里且不碰棋盘"，靠 `_play_emote()`
+	#     把两个头像切成表情、再验 `alpha > 0` 来保证"真的画了东西"（否则"一个表情都没有"
+	#     也能让几何全绿 = 有效分母为 0，§106）。
+	#   ★ 表情删除后头像圆里画的是 Steam 头像 / 首字占位，**没有探针能证明"真画了"**
+	#     （占位是 `draw_circle`，不产生可读副作用）⇒ 这条退化成**纯几何**判据。
+	#     剩下两量仍有牙齿：头像圆是自绘的，半径或坐标算错就会越出抽屉 / 压上棋盘，
+	#     而那是一种**不报错**的观感缺陷。"占位分支活没活"由 ⑬（identity 绘制计数）
+	#     和 `--shotchat` 那张目检图兜着。
 	var bb_all: Rect2 = _board_bbox()
 	if board_panel_enabled:
 		bb_all = bb_all.grow(board_panel_pad)
@@ -22293,11 +25794,9 @@ func _emote_self_test() -> void:
 		if ar.intersects(bb_all):
 			av_ok = false
 			av_msg += " 槽%d 头像圆压住棋盘 %s" % [slot, str(ar)]
-	var painted: bool = _last_emote_alpha[0] > 0.0 and _last_emote_alpha[1] > 0.0
-	checks.append(["⑭ 表情只画在头像圆里且不碰棋盘｜两槽各量一次且必须真有表情在画%s" % av_msg,
-			av_ok and painted, "头像圆 自己 %s ｜ 对端 %s ｜ 棋盘 %s ｜ alpha=(%.2f,%.2f)" % [
-					str(avatar_screen_rect(0)), str(avatar_screen_rect(1)), str(bb_all),
-					_last_emote_alpha[0], _last_emote_alpha[1]]])
+	checks.append(["⑭ 头像圆不越出抽屉、也不碰棋盘｜两槽各量一次%s" % av_msg,
+			av_ok, "头像圆 自己 %s ｜ 对端 %s ｜ 棋盘 %s" % [
+					str(avatar_screen_rect(0)), str(avatar_screen_rect(1)), str(bb_all)]])
 
 	# ---- ⑮ 棋盘恒在窗口正中间（联机 / 人机两档各量一次，正负成对）----
 	#   ★ 用户口令：「本地和人机模式棋盘也要放在正中间」。
@@ -22309,6 +25808,10 @@ func _emote_self_test() -> void:
 	#     两者中心差一个 pad 的事，量面积法关系容易自己骗自己（§70 判据不许重实现被测逻辑）。
 	var mid_ok := true
 	var mid_msg := ""
+	# ★ 通过时也必须打读数（§71 读数与判定同源）：原版只在失败时把偏移塞进 `mid_msg`，
+	#   于是绿的日志里看不到任何"量到了多少" —— 分不清"两档都偏 0.4px"与
+	#   "循环压根没进去 / 分母为 0"。现在两档的偏移**无论成败都逐条记下来**。
+	var mid_read := ""
 	for mode in [ONLINE, VS_AI]:
 		game_mode = mode
 		_refresh_net_extras()
@@ -22317,12 +25820,12 @@ func _emote_self_test() -> void:
 		if board_panel_enabled:
 			bb2 = bb2.grow(board_panel_pad)
 		var off: float = bb2.get_center().x - get_viewport_rect().size.x * 0.5
+		mid_read += " %s偏 %.2fpx" % ["联机" if mode == ONLINE else "人机", off]
 		if absf(off) > 1.5:
 			mid_ok = false
 			mid_msg += " mode=%d 偏 %.1fpx" % [mode, off]
 	checks.append(["⑮ 棋盘恒在窗口正中间｜联机与人机两档各量一次，偏移 ≤1.5px%s" % mid_msg,
-			mid_ok, "视口中线 %.1f ｜ 联机/人机下盘的盒中心都须落在它上面" % (
-					get_viewport_rect().size.x * 0.5)])
+			mid_ok, "视口中线 %.1f ｜%s" % [get_viewport_rect().size.x * 0.5, mid_read]])
 
 	# ---- 复原现场 ----
 	game_mode = int(sv["game_mode"])
@@ -22330,10 +25833,8 @@ func _emote_self_test() -> void:
 	_chan = sv["chan"]
 	_net_phase = str(sv["net_phase"])
 	_net_connected = bool(sv["connected"])
-	_emote_bubble_left = [0.0, 0.0]
-	_emote_bubble_idx = [-1, -1]
-	_last_emote_alpha = [0.0, 0.0]
-	_last_emote_left = [0.0, 0.0]
+	# ⚰️ 2026-11-02：这里原有四行把表情状态清空（`_emote_bubble_left/idx`、`_last_emote_*`）。
+	#   表情删除后没有这些状态可清。
 	_refresh_net_extras()
 
 	var failed: Array = []
@@ -22341,15 +25842,673 @@ func _emote_self_test() -> void:
 		var okc: bool = (c[1] is bool) and (c[1] as bool)
 		if not okc:
 			failed.append(str(c[0]))
-		print("[emotetest] %s %s（%s）" % [c[0], "✓" if okc else "✗", c[2]])
-	print("[emotetest] 判据 %d 条，失败 %d 条%s" % [checks.size(), failed.size(),
+		print("[idtest] %s %s（%s）" % [c[0], "✓" if okc else "✗", c[2]])
+	print("[idtest] 判据 %d 条，失败 %d 条%s" % [checks.size(), failed.size(),
 			"" if failed.is_empty() else "：" + ", ".join(failed)])
-	print("[emotetest] 结论：", "通过 ✓" if failed.is_empty() and checks.size() > 0 else "失败 ✗")
+	print("[idtest] 结论：", "通过 ✓" if failed.is_empty() and checks.size() > 0 else "失败 ✗")
 	get_tree().quit()
 
 
-## 自检（--drawertest，2026-10-21）：侧抽屉几何 + 「严防重叠」。
+## 自检（--chattest，2026-11-01）：文字 / 语音聊天。
 ##
+## ★ 这一档的**唯一**目的：把"加聊天"这次改动里所有会**静默坏掉**的地方各钉一条判据。
+##   聊天本身没有难算法，风险全在接缝上：
+##     · 输入框抢焦点 ⇒ 对局快捷键失效（打字时按 r 清盘）—— ⑧⑨ 正负成对；
+##     · 消息入口不认 `"chat"` ⇒ 对面发来什么都不显示 —— ①；
+##     · 清洗漏了控制字符 ⇒ 一条 `\n\n\n\n` 把记录区顶空 —— ②；
+##     · 语音编解码坏了 ⇒ 听感是"沙沙声"，没有任何报错 —— ⑩⑪ 用 SNR 量；
+##     · 语音包没人接 ⇒ 对面说话永远听不见 —— ⑫；
+##     · 聊天区把左抽屉撑破 ⇒ 内容压到棋盘上（同右抽屉 ⑥ 那条病）—— ⑮。
+##
+## ★ 判据口径：**不**依赖 Steam、**不**依赖真麦克风、**不**依赖音频驱动。
+##   编解码喂合成正弦（自己算 SNR），网络侧用 `_ChatProbeChan`（内联假通道）量"交没交出去"。
+##   麦克风那一条只验"探测不崩且理由非空"——headless 下它必然不可用，**如实报告不算红**
+##   （§138：环境事实与代码坏必须分开报）。
+func _chat_self_test() -> void:
+	print("[chattest] ===== 文字 / 语音聊天 =====")
+	var checks: Array = []
+	var sv := {
+		"game_mode": game_mode, "chan": _chan, "connected": _net_connected,
+		"lines": _chat_lines.duplicate(), "gate": _input_gate,
+		"von": _voice_on, "mute": _mute_remote, "rxm": _voice_rx_muted,
+		"blk": _block_remote, "cbk": _chat_rx_blocked,
+	}
+	if _drawer_layer == null or not is_instance_valid(_drawer_layer):
+		_build_drawers()
+	# 联机态（聊天入口要求 `can_chat()` 为真：ONLINE + 通道 + 已连接）
+	game_mode = ONLINE
+	_net_connected = true
+	_chat_lines.clear()
+	_chat_last_sent_ms = 0
+	_rebuild_chat_log()
+	await get_tree().process_frame
+
+	# ---- ① 对端消息经**真实分发入口**进记录 ----
+	#   ★ 调 `_on_relay_message` 而不是 `_append_chat`：后者只证明"拼串函数能跑"，
+	#     证明不了 `"chat"` 这条分支存在（漏写分支 ⇒ 对面说话全静音，且没有任何报错）。
+	_on_relay_message({"m": "chat", "t": "你好"})
+	var line0: String = _chat_lines[-1] if not _chat_lines.is_empty() else ""
+	checks.append(["① 对端 chat 消息经 _on_relay_message 进记录｜漏写分支则永远静音",
+			_chat_lines.size() == 1 and line0.contains("你好"),
+			"条数=%d 末条=%s" % [_chat_lines.size(), line0]])
+
+	# ---- ② 清洗：控制字符 / 换行 / 纯空白必须进不了记录 ----
+	#   ★ 三类都试：纯空白（strip 后空）、换行（不能原样带进去撑爆记录区）、纯控制符。
+	var before2: int = _chat_lines.size()
+	_on_relay_message({"m": "chat", "t": "   \n\n\t  "})
+	_on_relay_message({"m": "chat", "t": "\u0001\u0002\u0003"})
+	var grew2: int = _chat_lines.size() - before2
+	var no_nl := true
+	for line in _chat_lines:
+		if line.contains("\n") or line.contains("\t"):
+			no_nl = false
+	checks.append(["② 纯空白/控制字符不产生记录且任何记录不含换行｜防一条 \\n 顶空记录区",
+			grew2 == 0 and no_nl, "新增=%d 条 含换行=%s" % [grew2, str(not no_nl)]])
+
+	# ---- ③ 超长截断（发送与接收共用 `_sanitize_chat`）----
+	var long_txt := ""
+	for i in 500:
+		long_txt += "甲"
+	_on_relay_message({"m": "chat", "t": long_txt})
+	var last3: String = _chat_lines[-1]
+	# 记录格式是"名字：正文" ⇒ 正文长度 = 总长 − 名字长 − 1
+	var body3: String = last3.substr(last3.find("：") + 1)
+	checks.append(["③ 超长文本截到 %d 字｜截断在 cleanser 里，收发同源" % CHAT_MAX_LEN,
+			body3.length() == CHAT_MAX_LEN, "正文长度=%d（输入 500）" % body3.length()])
+
+	# ---- ④ 无通道时必须发不出去（且不写记录）----
+	var keep_chan: NetChannel = _chan
+	_chan = null
+	_chat_last_sent_ms = 0
+	var before4: int = _chat_lines.size()
+	var sent4 := send_chat("没通道")
+	checks.append(["④ 无通道时发送返回 false 且不写记录｜不许本地自己跟自己聊",
+			(not sent4) and _chat_lines.size() == before4,
+			"返回=%s 记录 %d→%d" % [str(sent4), before4, _chat_lines.size()]])
+
+	# ---- ⑤ 有通道时真的交给通道（内联假通道，量"发出去的字典"）----
+	var probe := _ChatProbeChan.new()
+	add_child(probe)
+	_chan = probe
+	_chat_last_sent_ms = 0
+	var before5: int = _chat_lines.size()
+	var sent5 := send_chat(" 喂\u0007 ")
+	var wire_ok: bool = probe.sent.size() == 1 \
+			and str(probe.sent[0].get("m", "")) == "chat" \
+			and str(probe.sent[0].get("t", "")) == "喂"
+	checks.append(["⑤ 发送走通道且载荷形态正确｜m=chat、正文已清洗",
+			sent5 and wire_ok and _chat_lines.size() == before5 + 1,
+			"发出=%s 通道收到=%s" % [str(sent5), str(probe.sent)]])
+
+	# ---- ⑥ 节流：同一时刻连发第二条必须被挡 ----
+	#   ★ 必须先把 `_chat_last_sent_ms` 清零：⑤ 刚发过一条，带着它的时间戳进来 ⇒
+	#     第一条就被节流挡下，判据红的是"判据自己摆错了现场"（真实代码没问题）。
+	_chat_last_sent_ms = 0
+	var before6: int = probe.sent.size()
+	var sent6a := send_chat("一")
+	var sent6b := send_chat("二")
+	# ★ 用**增量**断言而不是硬编码条数：条数会把"前面几条判据各发了几次"焊进这条判据里，
+	#   以后在 ⑥ 之前插一条发消息的判据，红的就是这里（而代码没坏）。
+	checks.append(["⑥ 发送防呆生效 · 间隔 %dms｜P2P 可靠通道不许被连点挤满" % chat_send_gap_ms,
+			sent6a and (not sent6b) and probe.sent.size() == before6 + 1,
+			"第一次=%s 第二次=%s 通道 %d→%d" % [
+					str(sent6a), str(sent6b), before6, probe.sent.size()]])
+
+	# ---- ⑦ 记录上限：塞爆后只留最新 `CHAT_LOG_MAX` 条 ----
+	var sent7 := ""
+	for i in CHAT_LOG_MAX + 10:
+		_chat_last_sent_ms = 0
+		# ★ 本条量的是"记录上限"，不是"发送频率"：把防呆窗口/冷却一起清空，
+		#   否则第 5 条起就被刷屏闸挡下 ⇒ 红的是判据自己摆错了现场。
+		_chat_send_times.clear()
+		_chat_cooldown_until_ms = 0
+		_chat_last_text = ""
+		sent7 = "第%d条" % i
+		send_chat(sent7)
+	var cap_ok: bool = _chat_lines.size() == CHAT_LOG_MAX \
+			and _chat_lines[-1].contains(sent7)
+	checks.append(["⑦ 记录条数上限 %d 且保留最新｜溢出删最旧" % CHAT_LOG_MAX,
+			cap_ok, "条数=%d 末条=%s" % [_chat_lines.size(), _chat_lines[-1]]])
+
+	# ---- ⑧⑨ 焦点闸：输入框持焦点时 R 不许重开；失焦后 R 仍走原路 ----
+	#   ★ 这两条必须**成对**：只做 ⑧ 的话，"闸门恒真"（任何键都被吞）也全绿 ——
+	#     那就等于把对局快捷键永久关掉，而不是"打字时让位"。
+	var key_ev := InputEventKey.new()
+	key_ev.keycode = KEY_R
+	key_ev.pressed = true
+	# ★ `game_mode` 临时压到 -1：这条测的是**闸门分不分流**，不是"R 按键真的重开"。
+	#   留在 ONLINE 会真的走 `_on_reset_pressed()`（会往假通道塞一条重置消息、还可能弹确认层），
+	#   那属于"判据自己制造副作用"，会让后面的 ⑮ 抽屉几何量到一张带弹层的现场。
+	var keep_g: int = game_mode
+	game_mode = -1
+	_input_gate = ""
+	if _chat_edit != null and is_instance_valid(_chat_edit):
+		_chat_edit.grab_focus()
+	var focused: bool = _chat_has_focus()
+	_input(key_ev)
+	var gate_focused: String = _input_gate
+	checks.append(["⑧ 输入框聚焦时 R 键被焦点闸拦下｜否则打字时按 r 会清盘",
+			focused and gate_focused == "chat", "has_focus=%s gate=%s" % [str(focused), gate_focused]])
+	if _chat_edit != null and is_instance_valid(_chat_edit):
+		_chat_edit.release_focus()
+	_input_gate = ""
+	_input(key_ev)
+	var gate_free: String = _input_gate
+	game_mode = keep_g
+	checks.append(["⑨ 阴性对照·失焦后 R 键落到对局快捷键｜证明 ⑧ 不是把键永久吞掉",
+			gate_free == "key", "gate=%s（期望 key）" % gate_free])
+
+	# ---- ⑩ ADPCM 往返 SNR（合成 440Hz 正弦，20 包）----
+	#   ★ 为什么不"断言解码数组非空"：那个在任何"能解出点东西"的实现下都绿，
+	#     而听感可能已经是一团沙（实测反例：把 `_next_pred` 的 dq 系数写反，
+	#     数组长度、取值范围全部正常，只是 SNR 从 ~20dB 掉到 3dB）。
+	var snr := _adpcm_roundtrip_snr(440.0, 20)
+	checks.append(["⑩ ADPCM 往返 SNR ≥ 15dB｜合成正弦，20 包连续编码解码",
+			snr >= 15.0, "SNR=%.2f dB" % snr])
+
+	# ---- ⑪ 丢包鲁棒：跳过前两包直接解第三包，SNR 仍须达标 ----
+	#   ★ 这是"每包自带预测器状态"那条设计的**唯一**判据。若改成包间延续状态，
+	#     丢包后解码会从错的地方起 ⇒ 这条立刻红（而听感只是"杂音重一点"，很难归因）。
+	var snr_skip := _adpcm_skip_snr(2)
+	checks.append(["⑪ 跳包后解单包 SNR ≥ 12dB｜每包自带状态，丢包不连累后续",
+			snr_skip >= 12.0, "SNR=%.2f dB（跳过前 2 包）" % snr_skip])
+
+	# ---- ⑫ 语音入站真的喂进播放队列 ----
+	var voice := _ensure_voice()
+	var rx_before: int = voice.packets_recv
+	var good_pkt := _adpcm_roundtrip_packet()
+	_on_voice_packet_in(good_pkt)
+	var rx_ok: bool = voice.packets_recv == rx_before + 1
+	# 坏包：必须返回 false、计一次丢包、且**不崩**（空数组走的是 `decode_packet` 的早退）
+	var drop_before: int = voice.packets_dropped
+	var bad_ok: bool = (not voice.rx_push(PackedByteArray())) \
+			and voice.packets_dropped == drop_before + 1
+	checks.append(["⑫ 语音入站：好包进队列 + 坏包计丢包且不崩｜走基类 voice_received",
+			rx_ok and bad_ok, "recv %d→%d dropped→%d" % [
+					rx_before, voice.packets_recv, voice.packets_dropped]])
+
+	# ---- ⑬ 语音出站真的交给通道（且走的是 send_voice，不是 send_message）----
+	var vbefore: int = probe.voice.size()
+	var mbefore: int = probe.sent.size()
+	voice.packet_out.emit(good_pkt)
+	var voice_ok: bool = probe.voice.size() == vbefore + 1 and probe.sent.size() == mbefore
+	checks.append(["⑬ 语音出站走 send_voice｜不许混进可靠消息通道",
+			voice_ok, "voice=%d→%d message=%d→%d" % [
+					vbefore, probe.voice.size(), mbefore, probe.sent.size()]])
+
+	# ---- ⑭ 麦克风探测：不崩 + 有理由（headless 下必然不可用，如实报告不算红）----
+	var mic_probe := VoiceChat.new()
+	add_child(mic_probe)
+	var mic_ok := mic_probe.start_capture()
+	var mic_reason := mic_probe.mic_reason()
+	# ★ 判据的形状：**探测行为**必须自洽 —— ok 为真时理由是空，ok 为假时理由必须非空。
+	#   只断言"不崩"等于没测；断言"必须 ok"则是把环境事实写成代码判据（headless 恒红）。
+	var mic_consistent: bool = (mic_ok and mic_reason == "") or ((not mic_ok) and mic_reason != "")
+	checks.append(["⑭ 麦克风探测自洽｜可用时无理由、不可用时必须有理由 · headless 属环境事实",
+			mic_consistent, "可用=%s 理由=%s 项目开关=%s" % [
+					str(mic_ok), mic_reason, str(mic_probe.input_enabled_by_project())]])
+	mic_probe.shutdown()
+	mic_probe.queue_free()
+
+	# ---- ⑮ 左抽屉内容不撑破面板（含新加的聊天区）----
+	#   ★ 与右抽屉 ⑥ 同一条病：面板是 `Panel`（尺寸被写死），内容一超宽/超高就溢出到棋盘那侧，
+	#     而 `judge_drawer_layout()` 只看面板矩形 ⇒ 它看不见溢出。
+	_chan = keep_chan
+	_refresh_net_extras()
+	_refit_hud()
+	await get_tree().process_frame
+	var cr := drawer_content_rect(0)
+	var min_sz: Vector2 = _drawer_left_body.get_combined_minimum_size()
+	var body_ok: bool = min_sz.x <= cr.size.x + 0.5 and min_sz.y <= cr.size.y + 0.5
+	# ★ 标题 2026-11-02 改口径：原文是「身份槽+表情+聊天」，表情整套删除后左抽屉里
+	#   实际装的是 **身份槽 → 常用短语格 → 聊天记录 → 输入行**。按名字认它的地方会
+	#   静默失效（§113）：标题说"+表情"而表情早没了，以后有人照标题判断"表情还在这儿"。
+	#   本条**只**量"内容最小尺寸没超出内容区"这一件事；三个孩子是否真装上由
+	#   idtest ⑬（identity 绘制计数）与 ⑯（短语格 6/6）分别兜着。
+	checks.append(["⑮ 左抽屉内容 身份槽+短语+聊天 不超出内容区｜内容区 %s" % str(cr.size),
+			body_ok, "内容最小尺寸=%s（含聊天区最小高 %.0f）" % [str(min_sz), CHAT_SCROLL_MIN_H]])
+
+	# ---- ⑯ UI 可用性按模式派生（★ 口径 2026-11-02 变更：人机档放开聊天）----
+	#   ★ 原文是"单机档必须锁死"，已被用户口令「现在接上」（AI 会回话）推翻。
+	#     **改判据、不许删**（§127）：新口径是三档 ——
+	#       本地双人 = 锁死（没有对话方）｜人机档 = 文字可打、语音锁死（没通道）｜联机 = 可打。
+	#   ★ 正负仍成对：只验"人机可打"会让"恒可打"绿过去，而那意味着本地双人对着空气说话。
+	#   ★ `_chan` 必须是 probe（不是 `keep_chan`）：联机档 `can_chat()` 要求真有通道，
+	#     拿 null 去测"联机档可打字"必然红 —— 那是判据自己摆错了现场。
+	_chan = probe
+	var keep_mode: int = game_mode
+	game_mode = LOCAL
+	_refresh_chat_ui()
+	var local_off: bool = (not _chat_edit.editable) and _chat_send_btn.disabled \
+			and _voice_btn.disabled
+	# ★ 短语按钮同属"发送入口"：本地双人档必须一起禁用，否则点了会静默无反应。
+	#   ★ 同时数一数按钮**真加了几个** —— 只比较常量数组会让"建了容器、一个都没 add_child"
+	#     绿过去（`_phrase_flow.get_child_count()` 才是真的）。
+	var phrase_n := 0
+	var phrase_off := true
+	if _phrase_flow != null and is_instance_valid(_phrase_flow):
+		for c in _phrase_flow.get_children():
+			if c is Button:
+				phrase_n += 1
+				if not (c as Button).disabled:
+					phrase_off = false
+	game_mode = VS_AI
+	# ★ 人机档必须**把 `_chan` 摘掉**：真实运行时人机局根本没有通道，留着 probe 会让
+	#   `can_voice()` 为真 ⇒ 量到的是"联机 + 人机"的混合态，而那个态不存在（§106 判据
+	#   必须跑在能触发目标分支的场面上）。第一版就是栽在这里：语音按钮被量成"可点"。
+	_chan = null
+	_refresh_chat_ui()
+	# 人机档：文字可打，语音必须仍是锁的（`can_voice()` 还要求 `_chan != null`）
+	var ai_on: bool = _chat_edit.editable and (not _chat_send_btn.disabled) \
+			and _voice_btn.disabled
+	_chan = probe
+	game_mode = ONLINE
+	_refresh_chat_ui()
+	var on_ok: bool = _chat_edit.editable and (not _chat_send_btn.disabled)
+	game_mode = keep_mode
+	checks.append(["⑯ 输入框可用性按模式派生｜本地双人锁死含短语格 · 人机/联机可打 · 语音只在联机",
+			local_off and phrase_off and ai_on and on_ok and phrase_n == CHAT_PHRASES.size(),
+			"本地锁=%s 短语禁用=%s（%d/%d 格）｜人机可打且语音锁=%s｜联机可打=%s" % [
+					str(local_off), str(phrase_off), phrase_n, CHAT_PHRASES.size(),
+					str(ai_on), str(on_ok)]])
+
+	# ---- ⑰ 播放链路真的建起来并开始喂样本（抓"收包正常但永远没声音"那一脚）----
+	#   ★ 背景：`_pump_playback()` 只在 `_player != null` 时才被 `_process()` 调到，
+	#     而建播放器的 `_ensure_player()` 第一版只写在它**里面** ⇒ 死锁 ⇒ 永远没声音。
+	#     ⑫ 只查 `packets_recv`，那个量在坏版本里照样涨 ⇒ 必须有这条独立的判据。
+	#   ★ 环境说明：headless 的音频驱动是 Dummy，`frames_pushed` 可能不推进。所以分两档报：
+	#     播放链路建起来了 = 硬要求（`has_playback()`）；"喂进去了多少帧"只印不判
+	#     （真机上它必然 > 0，而 headless 下把它写成判据就是一条环境性假红）。
+	_on_voice_packet_in(good_pkt)
+	for i in 4:
+		await get_tree().process_frame
+	var playback_ok: bool = voice.has_playback()
+	checks.append(["⑰ 收包后播放链路真的建起来｜不带这条，收包计数正常但一点声音都没有",
+			playback_ok, "has_playback=%s 已喂帧=%d 队列=%d" % [
+					str(playback_ok), voice.frames_pushed, voice._queued_samples()]])
+
+	# ---- ⑱ 麦克风开关：按钮按下态 == 状态真源 == 真实 tx ----
+	#   ★ 判据形状是「三者一致」而不是「必须开起来」：headless 下麦克风必然起不来，
+	#     写成"必须 tx=true"就是一条环境性假红（§138 环境事实 ≠ 代码坏）。
+	#     而坏版本在**任何**环境下都会让三者不一致：按钮亮了却没开麦，或起不来还留着亮。
+	#   ★ 必须用 `button_pressed = true` 驱动，手写 `toggled.emit(true)` 不改按下态
+	#     ⇒ 量到的是"信号发了但按钮没动"的假现场（2026-11-01 `--mictest` ⑤ 栽过）。
+	_voice_btn.button_pressed = true
+	var von_state: bool = _voice_on
+	var von_tx: bool = voice.is_tx()
+	var von_btn: bool = _voice_btn.button_pressed
+	_voice_btn.button_pressed = false
+	var voff_ok: bool = (not _voice_on) and (not voice.is_tx()) and (not _voice_btn.button_pressed)
+	checks.append(["⑱ 麦克风开关三者一致 · 按钮按下态 = 状态真源 = 真实 tx",
+			von_state == von_tx and von_btn == von_state and voff_ok,
+			"开：真源=%s tx=%s 按钮=%s｜关：真源=%s tx=%s" % [
+					str(von_state), str(von_tx), str(von_btn),
+					str(_voice_on), str(voice.is_tx())]])
+
+	# ---- ⑲ 对方静音：入站真被拦 + 队列被当场清空 + 取消后同一包恢复 ----
+	#   ★ 三段缺一不可：
+	#     · 只验"静音后 recv 不涨" ⇒ 把 `rx_push` 整段删掉也绿；
+	#     · 只验"取消后能收" ⇒ 静音根本没拦也绿（静音成了纯文案开关）；
+	#     · 不验队列清空 ⇒ `flush_rx()` 没写也绿，而真实症状正是"点了静音还剩 0.3 秒声音"。
+	#   ★ 队列那条必须有对照：先塞 3 个包让队列非空（不然"静音前后都是 0"恒真，§138）。
+	_mute_btn.button_pressed = false            # 确保从"有声"开始
+	for i in 3:
+		_on_voice_packet_in(good_pkt)
+	var q_before: int = voice._queued_samples()
+	var rxm_before: int = _voice_rx_muted
+	var recv_before: int = voice.packets_recv
+	_mute_btn.button_pressed = true             # ⇒ `_on_mute_remote_toggled(true)` ⇒ flush_rx
+	var q_after: int = voice._queued_samples()
+	_on_voice_packet_in(good_pkt)
+	var recv_muted: int = voice.packets_recv
+	var blocked_ok: bool = recv_muted == recv_before and _voice_rx_muted == rxm_before + 1
+	var flush_ok: bool = q_before > 0 and q_after == 0
+	_mute_btn.button_pressed = false
+	_on_voice_packet_in(good_pkt)
+	var restore_ok: bool = voice.packets_recv == recv_before + 1
+	checks.append(["⑲ 对方静音 · 入站被拦 + 队列当场清空 + 取消后同一包恢复入队",
+			blocked_ok and flush_ok and restore_ok,
+			"队列 %d→%d｜静音时 recv %d→%d（应不动）拦下 %d→%d｜取消后 recv→%d（应 +1）" % [
+					q_before, q_after, recv_before, recv_muted,
+					rxm_before, _voice_rx_muted, voice.packets_recv]])
+
+	# ---- ⑳ 禁言 + 对端槽两个小开关 ----
+	#   ★ 新口径（2026-11-05）：① 禁言时对方消息进不了记录、但被**暂存**，聊天框只显示
+	#     「⊘ 禁言中」这一条（不显示历史）；② 解除后暂存消息回放到记录里；
+	#     ③ 之后同一条能进（阴性对照）；④ 两个开关真挂在对端槽、默认藏、悬停出。
+	_chat_lines.clear()
+	_chat_blocked_lines.clear()
+	_rebuild_chat_log()
+	_block_remote = false
+	_chat_rx_blocked = 0
+	_block_btn.set_pressed_no_signal(false)
+	_block_btn.button_pressed = true          # ⇒ `_on_block_remote_toggled(true)`
+	var ban_txt: String = ""
+	if _chat_log.get_child_count() > 0:
+		var ban_node := _chat_log.get_child(0)
+		if ban_node is Label:
+			ban_txt = (ban_node as Label).text
+	_on_relay_message({"m": "chat", "t": "被屏蔽的这句"})
+	var blk_ok: bool = _chat_lines.is_empty() and _chat_rx_blocked == 1 \
+			and _chat_blocked_lines.size() == 1 \
+			and ban_txt.contains("禁言") and ban_txt.contains("⊘")
+	var lines_when_blocked: int = _chat_lines.size()
+	var blocked_count: int = _chat_rx_blocked
+	_block_btn.button_pressed = false         # ⇒ 解除禁言 ⇒ 回放暂存的那条
+	var replay_ok: bool = _chat_lines.size() == 1 \
+			and _chat_lines[0].contains("被屏蔽的这句") and _chat_blocked_lines.is_empty()
+	_on_relay_message({"m": "chat", "t": "取消后能收到"})
+	var pass_ok: bool = _chat_lines.size() == 2 and _chat_lines[1].contains("取消后能收到")
+	var in_slot: bool = _net_id_peer != null and is_instance_valid(_net_id_peer) \
+			and _net_id_peer.is_ancestor_of(_mute_btn) and _net_id_peer.is_ancestor_of(_block_btn)
+	var hidden_first: bool = (not _mute_btn.visible) and (not _block_btn.visible)
+	_on_peer_hover(true)
+	var shown: bool = _mute_btn.visible and _block_btn.visible
+	checks.append(["⑳ 禁言只显禁言标记且暂存对方消息 · 解除后回放 + 两个开关挂对端槽且悬停才出现",
+			blk_ok and replay_ok and pass_ok and in_slot and hidden_first and shown,
+			"禁言时记录=%d 拦下=%d 标记=%s｜解除后 %d 条含暂存=%s｜后一条能进=%s｜在槽内=%s 默认藏=%s 悬停出=%s" % [
+					lines_when_blocked, blocked_count, ban_txt, _chat_lines.size(), str(replay_ok),
+					str(pass_ok), str(in_slot), str(hidden_first), str(shown)]])
+
+	# ---- 复原现场 ----
+	game_mode = int(sv["game_mode"])
+	_chan = sv["chan"]
+	_net_connected = bool(sv["connected"])
+	_chat_lines = sv["lines"]
+	_input_gate = str(sv["gate"])
+	_voice_on = bool(sv["von"])
+	_mute_remote = bool(sv["mute"])
+	_voice_rx_muted = int(sv["rxm"])
+	_block_remote = bool(sv["blk"])
+	_chat_rx_blocked = int(sv["cbk"])
+	# ★ 本批新增的运行期状态一并复位：自检结束后不应留下禁言缓存 / 冷却 / 回看态。
+	_chat_blocked_lines.clear()
+	_chat_send_times.clear()
+	_chat_last_text = ""
+	_chat_last_sent_ms = 0
+	_chat_cooldown_until_ms = 0
+	_chat_follow = true
+	_chat_back_left = 0.0
+	# ★ 状态真源复位之后，**按钮按下态**要跟着复位：`_refresh_chat_ui()` 只写文案和
+	#   `disabled`，它不碰 `button_pressed`（故意的：那是玩家动作的结果，不是它的派生量）。
+	_voice_btn.set_pressed_no_signal(_voice_on)
+	for pair in [[_mute_btn, _mute_remote], [_block_btn, _block_remote]]:
+		if pair[0] != null and is_instance_valid(pair[0]):
+			(pair[0] as Button).set_pressed_no_signal(bool(pair[1]))
+	# ---- ㉑ 聊天跟随（2026-11-08 重写：用户口令「主动上滑后没有自动下滑回来」）----
+	# ★★ 上一轮的 ㉑ 断的是"回看态下新消息**不许**抢位置"—— 那条口径已被用户否掉
+	#   （往上翻一眼就再也看不到新消息）。现在断的是反面，五颗牙：
+	#   ① 初始贴底；② 新消息 ⇒ 下一帧贴底且仍在跟随；
+	#   ③ 用户往回拉 ⇒ 当帧进入回看态（倒计时 > 0，不许立刻被弹回）；
+	#   ④ 回看态下来新消息 ⇒ **立刻**回底并恢复跟随（这是本次报障的那一口）；
+	#   ⑤ 再往回拉、**不放**新消息 ⇒ 静置 `chat_stick_return_sec` 秒也自动回底。
+	#   ★ ④⑤ 必须成对：只断 ④ 的话，"用户不动就一直挂在半路"没人管；只断 ⑤ 的话，
+	#     "新消息为什么立刻就到底"会被一个迟早会到点的倒计时冒充（§110 参照物分离）。
+	#   ★ 必须**等帧**且量**真实 ScrollBar**：`max_value` 滞后一帧，逻辑对而视图没滚到底
+	#     的话，只读 `_chat_follow` 会全绿。
+	_chat_follow = true
+	_chat_back_left = 0.0
+	_chat_lines.clear()
+	# ★ headless 视口高 1152 ⇒ 抽屉里聊天区能吃到 ~800px，14 行根本滚不起来
+	#   （`max_value ≈ page`，"拉回"那一档就成了对空集合的断言）。填满 60 行保证真的可滚。
+	for fi in 60:
+		_chat_lines.append("填充%02d：占满一行的聊天记录" % fi)
+	_rebuild_chat_log()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var cbar: ScrollBar = null
+	if _chat_scroll != null and is_instance_valid(_chat_scroll):
+		cbar = _chat_scroll.get_v_scroll_bar()
+	var at_bottom_0: bool = cbar != null and cbar.value >= cbar.max_value - cbar.page - CHAT_STICK_SLACK
+	_append_chat(1, "新消息：立即贴底")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var at_bottom_1: bool = cbar != null and cbar.value >= cbar.max_value - cbar.page - CHAT_STICK_SLACK
+	var still_follow: bool = _chat_follow and _chat_back_left <= 0.0
+	# ③ 用户主动往回拉：直接把滚动条推到顶（value 变小 ⇒ 信号认作用户动作）
+	var pull_ok: bool = false
+	var held_ok: bool = false
+	if cbar != null and cbar.max_value > cbar.page + 20.0:
+		_chat_scroll.scroll_vertical = 0
+		await get_tree().process_frame
+		pull_ok = not _chat_follow
+		held_ok = _chat_back_left > 0.0
+	# ④ 回看态下来新消息 ⇒ 立刻回底并恢复跟随
+	_append_chat(1, "回看期间来的新消息")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var yank_ok: bool = _chat_follow and cbar != null \
+			and cbar.value >= cbar.max_value - cbar.page - CHAT_STICK_SLACK
+	# ⑤ 再往回拉、这次**不放**新消息 ⇒ 静置 `chat_stick_return_sec` 秒也要回底
+	#   ★ 直接调 `_tick_chat(秒数)` 而不是真等两秒：倒计时就是它自己在减，
+	#     等真时间只会让自检慢两秒、且和 `_process` 的 delta 赛跑。
+	var idle_ok: bool = false
+	if cbar != null and cbar.max_value > cbar.page + 20.0:
+		_chat_scroll.scroll_vertical = 0
+		await get_tree().process_frame
+		var back_to_view: bool = not _chat_follow
+		_tick_chat(maxf(0.1, chat_stick_return_sec) + 1.0)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		idle_ok = back_to_view and _chat_follow \
+				and cbar.value >= cbar.max_value - cbar.page - CHAT_STICK_SLACK
+	checks.append(["㉑ 新消息立即回底 ｜ 上滑当帧不被弹回 ｜ 回看态来新消息立刻回底 ｜ 静置到点也回底",
+		at_bottom_0 and at_bottom_1 and still_follow and pull_ok and held_ok and yank_ok and idle_ok,
+		"初始贴底=%s 新消息后贴底=%s 仍跟随=%s 拉回进回看=%s 倒计时已起=%s 新消息抢回=%s 静置回底=%s" % [
+			at_bottom_0, at_bottom_1, still_follow, pull_ok, held_ok, yank_ok, idle_ok]])
+	# ---- ㉒ 抽屉收起时对方消息弹气泡 · 点气泡展开聊天（2026-11-07）----
+	# ★ 两颗牙：① 收起态收到 slot==1 消息 ⇒ 气泡**真的建出来且可见**（不是只改了个字符串）；
+	#   ② 点气泡 ⇒ 左抽屉真的展开、气泡收掉。★ 走 `_on_chat_bubble_input()` 合成真事件，
+	#   不直接 `_set_drawer_open()` —— 后者证明不了"点击那根线接上了"。
+	_chat_bubble_probe = true
+	_set_drawer_open(0, false)
+	_append_chat(1, "气泡测试消息")
+	var b_shown: bool = _chat_bubble != null and is_instance_valid(_chat_bubble) \
+			and _chat_bubble.visible and _chat_bubble_label != null \
+			and _chat_bubble_label.text.contains("气泡测试消息")
+	var click_ev := InputEventMouseButton.new()
+	click_ev.pressed = true
+	click_ev.button_index = MOUSE_BUTTON_LEFT
+	_on_chat_bubble_input(click_ev)
+	var b_click_ok: bool = _drawer_left_open \
+			and _chat_bubble != null and is_instance_valid(_chat_bubble) \
+			and not _chat_bubble.visible
+	_dismiss_chat_bubble()
+	_chat_bubble_probe = false
+	_set_drawer_open(0, true)       # 复原：后续复位代码依赖抽屉是展开的
+	checks.append(["㉒ 抽屉收起时对方消息弹气泡 ｜ 点气泡展开聊天",
+		b_shown and b_click_ok,
+		"收起后气泡可见=%s 文案命中=%s ｜ 点击后展开=%s 气泡收掉=%s" % [
+			b_shown, b_shown, b_click_ok, b_click_ok]])
+	# 悬停层复位：⑳ 把按钮显出来了，不复位的话自检跑完抽屉里一直挂着两个图标。
+	_peer_hover = false
+	for b in [_mute_btn, _block_btn]:
+		if b != null and is_instance_valid(b):
+			(b as Button).visible = false
+	_rebuild_chat_log()
+	_refresh_net_extras()
+	if probe.is_inside_tree():
+		probe.queue_free()
+
+	var failed: Array = []
+	for c in checks:
+		var okc: bool = (c[1] is bool) and (c[1] as bool)
+		if not okc:
+			failed.append(str(c[0]))
+		print("[chattest] %s %s（%s）" % [c[0], "✓" if okc else "✗", c[2]])
+	print("[chattest] 判据 %d 条，失败 %d 条%s" % [checks.size(), failed.size(),
+			"" if failed.is_empty() else "：" + ", ".join(failed)])
+	print("[chattest] 结论：", "通过 ✓" if failed.is_empty() and checks.size() > 0 else "失败 ✗")
+	get_tree().quit()
+
+
+## 编码/解码一整段合成正弦，返回重建波形的 SNR（dB）。
+## ★ SNR 是这一批唯一"有牙齿"的音频判据：`Array.is_empty()` / "取值在 [-1,1]" 这类断言
+##   在**任何**能跑通的实现下都绿，包括系数写反、步长表用错、包间状态没接上的版本。
+func _adpcm_roundtrip_snr(freq: float, packets: int) -> float:
+	var pred := 0
+	var idx := 0
+	var ref_all := PackedFloat32Array()
+	var dec_all := PackedFloat32Array()
+	for p in packets:
+		var src := _synth_sine(freq, p * VoiceChat.PACKET_SAMPLES)
+		var bytes := VoiceChat.encode_packet(src, pred, idx)
+		var st := VoiceChat.packet_end_state(bytes)
+		pred = int(st[0])
+		idx = int(st[1])
+		ref_all.append_array(src)
+		dec_all.append_array(VoiceChat.decode_packet(bytes))
+	return _snr_db(ref_all, dec_all)
+
+
+## 跳过前 `skip` 包、只解后一包，返回它与理想正弦的 SNR（量"每包自带状态"）。
+func _adpcm_skip_snr(skip: int) -> float:
+	var pred := 0
+	var idx := 0
+	var last_src := PackedFloat32Array()
+	var last_bytes := PackedByteArray()
+	for p in skip + 1:
+		last_src = _synth_sine(440.0, p * VoiceChat.PACKET_SAMPLES)
+		last_bytes = VoiceChat.encode_packet(last_src, pred, idx)
+		var st := VoiceChat.packet_end_state(last_bytes)
+		pred = int(st[0])
+		idx = int(st[1])
+	return _snr_db(last_src, VoiceChat.decode_packet(last_bytes))
+
+
+func _adpcm_roundtrip_packet() -> PackedByteArray:
+	return VoiceChat.encode_packet(_synth_sine(440.0, 0), 0, 0)
+
+
+## 合成一段 16k 正弦（幅度 0.5 ⇒ 不会因为削顶让 SNR 失真）。
+func _synth_sine(freq: float, start_sample: int) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	out.resize(VoiceChat.PACKET_SAMPLES)
+	for i in VoiceChat.PACKET_SAMPLES:
+		var t := float(start_sample + i) / float(VoiceChat.SAMPLE_RATE)
+		out[i] = 0.5 * sin(TAU * freq * t)
+	return out
+
+
+func _snr_db(ref: PackedFloat32Array, dec: PackedFloat32Array) -> float:
+	var n: int = mini(ref.size(), dec.size())
+	if n == 0:
+		return -999.0
+	var sig := 0.0
+	var err := 0.0
+	for i in n:
+		sig += ref[i] * ref[i]
+		var d := ref[i] - dec[i]
+		err += d * d
+	if err <= 0.0:
+		return 999.0
+	return 10.0 * log(sig / err) / log(10.0)
+
+
+## 内联假通道：只记录"交给通道的载荷"，不碰 Steam。
+## ★ 自检里必须用**真实通道接口**（`NetChannel`）而不是往 `_chan` 塞个字典：
+##   `send_chat()` 调的是 `_chan.send_message()`，形态不对这里会直接崩 —— 那正好是想要的信号
+##   （比"发出去成功、对面收不到"好查一万倍）。
+## 自绘小图标（麦克风 / 扬声器 / 聊天气泡）。**唯一**的图标绘制真源。
+## ★ 不为 Button 设 `icon`：那需要一张 Texture2D 资源。本工程 UI 一直零外部图标资源
+##   （自绘 = 零 `.import`、不占 `.pck` 图集），程序画的图标还能跟着主题墨色走、
+##   深浅两套主题都不用另存两份图。
+## ★★ 挂在**子 Control** 上，绝不挂 Button 自己的 `draw` 信号：2026-10-22 实测
+##   挂 Button 的 `draw` 有约 1/3 概率在退出时 `0xC0000005`（墓碑见
+##   `_draw_identity_slot()` 上方）。子 Control 这条路跑过整套表情，一次没崩。
+## ★ 全部图元 `antialias = false`（§128）：抗锯齿自绘同样会偶发访问违例，
+##   而且崩在进程退出那一刻 —— 日志干净、grep 不到，只能靠"退出码非 0"撞出来。
+class _GlyphIcon extends Control:
+	## "mic"（麦克风）/"speaker"（扬声器）/"chat"（聊天气泡）
+	var kind: String = "mic"
+	## true = 正常态；false = 画一条斜杠（关麦 / 静音 / 屏蔽）。
+	## ★ 关闭态**不能只变灰**：浅色主题下抽屉底本来就浅，灰图标几乎看不见，
+	##   玩家会以为"图标没画出来"。斜杠在两种主题下都明确。
+	var on: bool = true
+	var ink: Color = Color.BLACK
+
+	func _draw() -> void:
+		var s: float = minf(size.x, size.y)
+		if s < 6.0:
+			return
+		var c := size * 0.5
+		var col := Color(ink.r, ink.g, ink.b, 1.0 if on else 0.55)
+		var th: float = maxf(1.2, s * 0.075)
+		match kind:
+			"mic":
+				# 胶囊主体（矩形 + 上下两个半圆）+ 支架半弧 + 立柱 + 底座
+				var bw: float = s * 0.20
+				var bt: float = c.y - s * 0.32
+				var bb: float = c.y + s * 0.06
+				draw_rect(Rect2(c.x - bw * 0.5, bt, bw, bb - bt), col, true)
+				draw_circle(Vector2(c.x, bt), bw * 0.5, col)
+				draw_circle(Vector2(c.x, bb), bw * 0.5, col)
+				var rr: float = s * 0.26
+				# 角度 0.12π..0.88π = 下半圈（Godot 的 y 轴向下）⇒ 这就是"托住麦克风"那道弧
+				draw_arc(Vector2(c.x, c.y + s * 0.02), rr, PI * 0.12, PI * 0.88,
+						14, col, th, false)
+				draw_line(Vector2(c.x, c.y + s * 0.02 + rr),
+						Vector2(c.x, c.y + s * 0.34), col, th, false)
+				draw_line(Vector2(c.x - s * 0.13, c.y + s * 0.34),
+						Vector2(c.x + s * 0.13, c.y + s * 0.34), col, th, false)
+			"speaker":
+				# 箱体（矩形 + 喇叭口的梯形）+ **一道**声波。
+				# ★ 只画一道：24px 宽里塞两道弧，两道弧会糊成一团（第一版实测，
+				#   24px 下看过去像"一个带毛边的方块"，认不出是喇叭）。
+				var x0: float = c.x - s * 0.32
+				draw_rect(Rect2(x0, c.y - s * 0.12, s * 0.13, s * 0.24), col, true)
+				draw_colored_polygon(PackedVector2Array([
+					Vector2(x0 + s * 0.12, c.y - s * 0.12),
+					Vector2(c.x - s * 0.02, c.y - s * 0.32),
+					Vector2(c.x - s * 0.02, c.y + s * 0.32),
+					Vector2(x0 + s * 0.12, c.y + s * 0.12),
+				]), col)
+				draw_arc(Vector2(c.x - s * 0.02, c.y), s * 0.26,
+						-PI * 0.28, PI * 0.28, 14, col, maxf(1.6, th * 1.3), false)
+			"chat":
+				# 空心气泡（矩形描边 + 左下小尾巴）。
+				# ★ 描边比麦克风的线更粗一档：气泡在 24px 下只剩 14×10 的框，
+				#   1.2px 的细线在浅色抽屉底上基本看不见（第一版目检的实况）。
+				var w2: float = s * 0.32
+				var h2: float = s * 0.22
+				var top: float = c.y - h2 - s * 0.06
+				draw_rect(Rect2(c.x - w2, top, w2 * 2.0, h2 * 2.0), col, false,
+						maxf(1.8, th * 1.5))
+				draw_colored_polygon(PackedVector2Array([
+					Vector2(c.x - w2 * 0.60, top + h2 * 2.0),
+					Vector2(c.x - w2 * 0.10, top + h2 * 2.0 + s * 0.20),
+					Vector2(c.x + w2 * 0.20, top + h2 * 2.0),
+				]), col)
+		if not on:
+			# 关闭态：一条斜杠压过去
+			draw_line(Vector2(c.x - s * 0.30, c.y + s * 0.30),
+					Vector2(c.x + s * 0.30, c.y - s * 0.30), col,
+					maxf(1.6, s * 0.09), false)
+
+
+class _ChatProbeChan extends NetChannel:
+	var sent: Array = []
+	var voice: Array = []
+	var _open := true
+
+	func is_live() -> bool:
+		return _open
+
+	func send_message(msg: Dictionary) -> void:
+		if _open:
+			sent.append(msg)
+
+	func supports_voice() -> bool:
+		return true
+
+	func send_voice(data: PackedByteArray) -> bool:
+		if not _open:
+			return false
+		voice.append(data)
+		return true
+
+
+## 自检（--drawertest，2026-10-21）：侧抽屉几何 + 「严防重叠」。
 ## ★ 这一档存在的理由：用户口令是「**严防**重叠」—— 一个"防"字就说明它不能靠目测，
 ##   必须有一条能在**窄窗口 / 换盘型 / 换主题**下都成立的判据。核心那条
 ##   （`judge_drawer_layout()`）量的是真实矩形，且配了一把阴性对照刀（④）：
@@ -22436,29 +26595,34 @@ func _drawer_self_test() -> void:
 	_refit_hud()
 	_adapt_to_screen()
 
-	# ---- ⑤ 走**真实点击入口**翻抽屉：状态翻、面板与**按钮簇**一起翻、棋盘不动 ----
+	# ---- ⑤ 走**真实点击入口**收起抽屉：状态翻、面板/按钮簇/收起把手同生同灭、棋盘不动 ----
 	#   ★ 用 `pressed.emit()` 而不是直接改 `_drawer_right_open`：后者只证明"赋值语句能跑"，
 	#     证明不了"按钮接的是这条线"（§127 判据要量真实入口）。
 	#   ★ 2026-10-22 加断言 `_hud_box.visible`（用户报「抽屉收起仍有按钮在」）：
-	#     `_hud_box` 不是面板的子节点 ⇒ 面板藏了、按钮还浮着。**只查面板会全绿**，
-	#     因为面板确实藏了 —— 这一类"半藏"只有同时查内容才逮得到。
+	#     `_hud_box` 不是面板的子节点 ⇒ 面板藏了、按钮还浮着。**只查面板会全绿**。
+	#   ★ 2026-11-07 二次返工：把手从"恒隐藏"改成"展开时可见的收起按钮" ⇒
+	#     本条要同时断「点之前把手看得见」和「点之后把手藏掉」，否则"按钮在哪里"没有判据。
 	var before_open: bool = _drawer_right_open
 	var before_vis: bool = _drawer_right_panel.visible
 	var before_box: bool = _hud_box.visible
+	var before_handle: bool = _drawer_right_handle.visible
 	var bb_before: Rect2 = _board_bbox()
 	_drawer_right_handle.pressed.emit()
 	await get_tree().process_frame
 	var after_open: bool = _drawer_right_open
 	var after_vis: bool = _drawer_right_panel.visible
 	var after_box: bool = _hud_box.visible
+	var after_handle: bool = _drawer_right_handle.visible
 	var bb_after: Rect2 = _board_bbox()
-	var toggle_ok: bool = (after_open != before_open) and (after_vis != before_vis) \
-			and (after_box != before_box) and bb_before.is_equal_approx(bb_after)
-	checks.append(["⑤ 点把手真的翻转抽屉｜面板与按钮簇同生同灭且棋盘不动",
-			toggle_ok, "开={%s→%s} 面板={%s→%s} 按钮簇={%s→%s}" % [
-					str(before_open), str(after_open), str(before_vis), str(after_vis),
-					str(before_box), str(after_box)]])
-	_drawer_right_handle.pressed.emit()      # 还原成展开
+	var toggle_ok: bool = before_open and before_handle and not after_open \
+			and (after_vis != before_vis) and (after_box != before_box) \
+			and not after_handle and bb_before.is_equal_approx(bb_after)
+	checks.append(["⑤ 点收起把手真的折叠抽屉｜面板、按钮簇、把手同生同灭且棋盘不动",
+			toggle_ok, "开={%s→%s} 面板={%s→%s} 按钮簇={%s→%s} 把手={%s→%s}" % [
+				str(before_open), str(after_open), str(before_vis), str(after_vis),
+				str(before_box), str(after_box), str(before_handle), str(after_handle)]])
+	_set_drawer_open(1, true)     # 复原成展开（收起态把手不可见，没法再点第二次）
+	_refit_hud()
 	await get_tree().process_frame
 
 	# ---- ⑥ 右抽屉内容（`_hud_box` 那一簇按钮）完整落在内容区内 ----
@@ -22512,6 +26676,91 @@ func _drawer_self_test() -> void:
 	var surf_ok: bool = lum_gap <= 0.10 and lum_gap >= 0.015 and ink_cr >= 4.5
 	checks.append(["⑨ 抽屉底色与页面底同深浅且字仍达标｜明度差 %.3f 字对比 %.2f" % [lum_gap, ink_cr],
 			surf_ok, "抽屉 L=%.3f 页面 L=%.3f" % [dl, pl]])
+
+	# ---- ⑩ 侧边悬停改造（2026-11-07 二次返工）：收起态无抽出按钮 + 展开态有可见收起按钮 +
+	#      拉出/推入有中间态 + 终态回到几何真源 ----
+	#   ★ 四颗牙：① 展开时两个把手 visible 且有「收起」tooltip（用户「收回的按钮在哪里」）；
+	#     ② 真折起后两个把手都不画（"抽出按钮隐藏"这条口令仍要守住）；
+	#     ③ 把动画进度钉在 0 / 0.5 / 1 三档，面板 x 必须**严格单调**（否则"动画"是瞬间跳变）；
+	#     ④ t=1 时面板 x 必须等于 `_drawer_rect()` —— 动画不许把最终摆位带歪。
+	#   ⚠️ 不调 `_tick_drawers()`：自检是自动化运行，那里会 snap 到终态，量不到中间态。
+	var open_vis: bool = (_drawer_left_handle != null and _drawer_left_handle.visible) \
+			and (_drawer_right_handle != null and _drawer_right_handle.visible)
+	var tip_ok: bool = _drawer_left_handle != null and _drawer_right_handle != null \
+			and _drawer_left_handle.tooltip_text == "收起" \
+			and _drawer_right_handle.tooltip_text == "收起"
+	_set_drawer_open(0, false)      # 真折起一次，看把手是不是跟着藏掉
+	_set_drawer_open(1, false)
+	_refit_hud()
+	var closed_hidden: bool = (not _drawer_left_handle.visible) \
+			and (not _drawer_right_handle.visible)
+	_set_drawer_open(0, true)       # 复原：下面的动画判据跑在展开态
+	_set_drawer_open(1, true)
+	_refit_hud()
+	var saved_lt: float = _drawer_left_t
+	var x0: float = 0.0
+	var xm: float = 0.0
+	var x1: float = 0.0
+	if _drawer_left_panel != null and is_instance_valid(_drawer_left_panel):
+		_drawer_left_t = 0.0
+		_apply_drawer_slide(0)
+		x0 = _drawer_left_panel.position.x
+		_drawer_left_t = 0.5
+		_apply_drawer_slide(0)
+		xm = _drawer_left_panel.position.x
+		_drawer_left_t = 1.0
+		_apply_drawer_slide(0)
+		x1 = _drawer_left_panel.position.x
+	var slide_ok: bool = _drawer_left_panel != null and is_instance_valid(_drawer_left_panel) \
+			and x0 < xm - 1.0 and xm < x1 - 1.0 \
+			and absf(x1 - _drawer_rect(0).position.x) <= 0.5
+	_drawer_left_t = saved_lt
+	_refit_drawers()          # 自动化档会 snap 回终态，把判据留下的半途位置抹掉
+	checks.append(["⑩ 展开有可见收起把手 · 收起态无抽出按钮 · 拉出推入有中间态 · 终态回到几何真源",
+			open_vis and tip_ok and closed_hidden and slide_ok,
+			"展开可见=%s 提示=%s 收起隐藏=%s ｜ 面板 x 0→0.5→1 = %.0f → %.0f → %.0f（终态期望 %.0f）" % [
+				open_vis, tip_ok, closed_hidden, x0, xm, x1, _drawer_rect(0).position.x]])
+
+	# ---- ⑪ 贴边改造（2026-11-08）：面板贴屏幕侧边 + 关闭按钮是最外侧一条 + 两者不重叠 ----
+	#   ★ 用户口令「改成抽屉与屏幕侧边相接，最侧边的一条就是关闭抽屉的按钮」。
+	#   ★ 六颗牙：① 左面板左边 == 把手宽；② 右面板右边 == 视口宽 − 把手宽；
+	#     ③ 两个把手都在屏幕最外沿（x=0 / end.x=视口宽）；
+	#     ④ 面板与把手**同高对齐**且上下各留 `hud_landscape_margin`（垂直边距必须留着，
+	#        理由见 `_drawer_rect()` 的注：它是 `--portraittest` ⑤c/⑤d 的真依赖）；
+	#     ⑤ 面板与把手**互不相交**；⑥ 面板外角倒角为 0（贴边留圆角会露出页面底的缺口）。
+	#   ⚠️ 断"面板 x == 把手宽"而不是"面板贴 0"：贴 0 的话面板会把关闭按钮盖住 ——
+	#     而"按钮被面板压住"正是上一版"按钮缩在面板内侧"的镜像错误，两种都不能绿。
+	var vsr := get_viewport_rect().size
+	var edm: float = GameConfig.hud_landscape_margin
+	var lpr := _drawer_rect(0)
+	var rpr := _drawer_rect(1)
+	var lhr := _drawer_handle_rect(0)
+	var rhr := _drawer_handle_rect(1)
+	var sq_l: bool = false
+	var sq_r: bool = false
+	if _drawer_left_panel != null and is_instance_valid(_drawer_left_panel):
+		var sbl: StyleBox = _drawer_left_panel.get_theme_stylebox("panel")
+		if sbl is StyleBoxFlat:
+			sq_l = int((sbl as StyleBoxFlat).corner_radius_top_left) == 0 \
+					and int((sbl as StyleBoxFlat).corner_radius_bottom_left) == 0
+	if _drawer_right_panel != null and is_instance_valid(_drawer_right_panel):
+		var sbr: StyleBox = _drawer_right_panel.get_theme_stylebox("panel")
+		if sbr is StyleBoxFlat:
+			sq_r = int((sbr as StyleBoxFlat).corner_radius_top_right) == 0 \
+					and int((sbr as StyleBoxFlat).corner_radius_bottom_right) == 0
+	var flush_ok: bool = absf(lpr.position.x - DRAWER_HANDLE_W) <= 0.5 \
+			and absf(rpr.end.x - (vsr.x - DRAWER_HANDLE_W)) <= 0.5 \
+			and absf(lhr.position.x) <= 0.5 and absf(rhr.end.x - vsr.x) <= 0.5 \
+			and absf(lpr.position.y - edm) <= 0.5 and absf(lpr.size.y - (vsr.y - 2.0 * edm)) <= 0.5 \
+			and absf(rpr.position.y - edm) <= 0.5 and absf(rpr.size.y - (vsr.y - 2.0 * edm)) <= 0.5 \
+			and absf(lhr.position.y - lpr.position.y) <= 0.5 \
+			and absf(rhr.position.y - rpr.position.y) <= 0.5 \
+			and absf(lhr.size.y - lpr.size.y) <= 0.5 and absf(rhr.size.y - rpr.size.y) <= 0.5 \
+			and not lhr.intersects(lpr) and not rhr.intersects(rpr) \
+			and sq_l and sq_r
+	checks.append(["⑪ 面板贴屏幕侧边 ｜ 关闭按钮是最外侧一条 ｜ 同高对齐且互不重叠 ｜ 外角不倒角",
+			flush_ok, "左面板 %s 右面板 %s ｜ 左键 %s 右键 %s ｜ 外角归零 左=%s 右=%s ｜ 边距 %.0f 视口 %s" % [
+				str(lpr), str(rpr), str(lhr), str(rhr), sq_l, sq_r, edm, str(vsr)]])
 
 	# ---- 复原现场 ----
 	game_mode = int(sv["game_mode"])
@@ -23710,6 +27959,14 @@ func _yema_duel_probe() -> void:
 	var base_seed := 20261023
 	var max_moves := 260
 	var nn_w := 1.0            # 开NN 那一侧的 `nn_weight`（0.3 = 名次混合只取三成）
+	# ★★ 这两个默认值（1.0 + 剪枝前）**故意不等于上线配置**（`ai_engine_yema.gd` 现在是
+	#   0.30 + 剪枝后）。理由：对打仪器要一个**恒定的历史基线**，才能和 11-06 之前那 48 局
+	#   并表（§116 干净基线不能跟着"当前默认值"跑；§143 同族）。
+	#   要量上线配置就显式写 `--yemaduel=...:w30:ap`。报告头必印这两个实际值 ⇒
+	#   "以为在量上线配置、其实量的是基线"不会静默发生。
+	# 开NN 那一侧的先验混合位置（`ap` token = 剪枝之后）。★ 只作用于 A 侧：
+	# B 侧要么关网络、要么是第二份权重（那时两侧必须同设置才叫 checkpoint 对打）。
+	var after_prune := false
 	# ★ `--yemaB=<权重.json>`（2026-10-26 加）：**第二份权重**。
 	#   给了 ⇒ 两侧都用网络（A=线上权重、B=这一份）⇒ 变成**两个 checkpoint 换色对打**；
 	#   没给 ⇒ 老行为：B 侧关网络（= 同参数磐石）。两种模式由这一个变量决定，没有第三种。
@@ -23727,6 +27984,19 @@ func _yema_duel_probe() -> void:
 				get_tree().quit(2)
 				return
 			break
+	# ★★ 2026-11-06 加 `--yemaA=<权重.json>`：A 侧原来**硬绑** `res://ai/yema_weights.json`。
+	#   后果不是"不方便"，是"想量一份还没上线的权重就只能去覆盖线上文件" —— 那是在
+	#   拿发货物当实验台，中途失败就留下一份"看起来正常"的错误线上权重。
+	#   两侧都显式（§159 同一族：A/B 仪器的两侧都不许依赖隐式默认）。
+	var nn_a_path := ""
+	for a in _argv():
+		if a == "--yemaA" or a.begins_with("--yemaA="):
+			nn_a_path = a.substr(8).strip_edges()
+			if nn_a_path == "":
+				print("[yemaduel] ✗ 用法：--yemaA=<权重.json>（裸写会静默退回线上权重，所以直接拒）")
+				get_tree().quit(2)
+				return
+			break
 	for a in _argv():
 		if a.begins_with("--yemaduel="):
 			for tok in a.substr(11).split(":"):
@@ -23741,9 +28011,14 @@ func _yema_duel_probe() -> void:
 					# 而磐石的 `_root_score` 是长期调过的复合启发式 —— 两者的**最优混合比**
 					# 是个经验问题，不是"接上就该用满"。实测 pw30 下全开是 4:0 全败。
 					nn_w = float(tok.substr(1)) / 100.0
+				elif tok == "ap":
+					# ★ 2026-11-06：先验混合挪到 Top-K 剪枝**之后**（候选集交给磐石，
+					#   网络只重排内部顺序）。用整词比较而不是 begins_with —— `ap` 太短，
+					#   前缀匹配会把将来任何 `a…` 的 token 一起吃进去（§109 的同族）。
+					after_prune = true
 				else:
 					# 未知 token 硬报错：静默吃掉的参数会印出"看起来正常"的结果（同 --xgduel）
-					print("[yemaduel] ✗ 未知 token：「%s」（支持 rN/pwN/sN/wN）" % tok)
+					print("[yemaduel] ✗ 未知 token：「%s」（支持 rN/pwN/sN/wN/ap）" % tok)
 					get_tree().quit(1)
 					return
 	if pw_lim <= 0 or rounds <= 0:
@@ -23762,19 +28037,26 @@ func _yema_duel_probe() -> void:
 	var on_tag := "A(开NN)"
 	var off_tag := "关NN"
 	var b_note := ""
+	if nn_a_path != "":
+		# 给了 `--yemaA` 但没给 `--yemaB` ⇒ 「指定权重 vs 纯磐石」，也是合法模式
+		on_tag = "A(指定权重)"
+		b_note = " | A 权重=%s" % nn_a_path
 	if nn_b_path != "":
-		on_tag = "A(线上权重)"
+		on_tag = "A(线上权重)" if nn_a_path == "" else "A(指定权重)"
 		off_tag = "B(第二份权重)"
-		b_note = " | B 权重=%s" % nn_b_path
+		b_note = " | A 权重=%s | B 权重=%s" % [
+			"res://ai/yema_weights.json（线上）" if nn_a_path == "" else nn_a_path, nn_b_path]
 	var on_cap_sum := 0            # 开NN方**被提子数**合计（结构量，越小越好）
 	var off_cap_sum := 0
 	var illegal_all := 0
 	var detail: Array[String] = []
 	var t0: int = Time.get_ticks_usec()
 	var gi := 0
-	print("[yemaduel] 盘=%s 格数=%d | %s vs %s (nn_weight=%.2f) | pw=%d 单线程 komi=0 | %d 轮（每轮 2 局换色）%s"
-		% [_bt_name(GameConfig.board_type), tiles.size(), on_tag, off_tag, nn_w, pw_lim, rounds,
-			b_note])
+	# ★ 混合位置必须印出来：`ap` 是"候选集交给磐石、网络只重排"，与默认（网络能换候选）
+	#   是两种完全不同的实验，报告里不写就会被当成同一件事的两次抽样。
+	print("[yemaduel] 盘=%s 格数=%d | %s vs %s (nn_weight=%.2f, 混合位置=%s) | pw=%d 单线程 komi=0 | %d 轮（每轮 2 局换色）%s"
+		% [_bt_name(GameConfig.board_type), tiles.size(), on_tag, off_tag, nn_w,
+			"剪枝之后" if after_prune else "剪枝之前", pw_lim, rounds, b_note])
 	for _r in rounds:
 		for flip in 2:
 			var on_is_black: bool = (flip == 0)
@@ -23786,11 +28068,17 @@ func _yema_duel_probe() -> void:
 			# 否则测的就不是"网络有没有用"而是"配置差"（§119：参照物不许动被测参数，
 			# 反过来也成立 —— 参照物与被测物除了被测参数之外必须逐项相同）。
 			var e_on := YemaAI.new()
+			# 与 `e_off` 同理：`weights_path` 必须在 `setup()` **之前**设（setup 里就 load 了）。
+			if nn_a_path != "":
+				e_on.weights_path = nn_a_path
 			e_on.setup(adjacency, Stone.WHITE if on_is_black else Stone.BLACK, seed_i)
 			e_on.time_budget_ms = 60000
 			e_on.threads = 1
 			e_on.root_width = 12
 			e_on.nn_weight = nn_w
+			# ★ 混合位置必须在下面那行 `_apply_search_params()` **之前**设：转给 `inner`
+			#   就发生在那里。设晚了这一局用的还是默认位置（静默错配置，报告照样好看）。
+			e_on.nn_after_prune = after_prune
 			e_on._apply_search_params()
 			e_on.inner.max_playouts = pw_lim
 			var e_off := YemaAI.new()
@@ -23806,6 +28094,12 @@ func _yema_duel_probe() -> void:
 			if nn_b_path != "":
 				# 两侧 `nn_weight` 必须相同：否则测的就是"混合比差"而不是"权重差"（§119）
 				e_off.nn_weight = nn_w
+			# ★★ 混合位置也必须**同侧同值**，而且必须显式设：以前这里靠"类默认值恰好
+			#   等于对打的默认值"侥幸一致 —— 2026-11-06 把 `YemaAI.nn_after_prune` 的默认
+			#   改成 `true` 之后，同一句 `--yemaduel --yemaB=...` 就静默变成
+			#   「A 剪枝前 vs B 剪枝后」，量出来的是配置差不是权重差（§119/§113）。
+			#   显式赋值 + 报告头印值，才是"两侧逐项相同"的可验证形态。
+			e_off.nn_after_prune = after_prune
 			e_off._apply_search_params()
 			e_off.inner.max_playouts = pw_lim
 			# ★ 硬失败：权重没加载成功时 `YemaAI` 会**静默**退化成"磐石"（ext_prior 空），
@@ -23819,6 +28113,29 @@ func _yema_duel_probe() -> void:
 				_quiet_place = quiet_bak
 				get_tree().quit(1)
 				return
+			# 配平自检（§119）：checkpoint 对打时两侧配置必须**逐项相同**，否则胜率差里
+			# 混着配置差。★ 量 `inner` 上的**生效值**，不是 `YemaAI` 的开关字段 ——
+			# 搜索读的是前者（§110 参照物必须同源）。这道闸就是为"类默认值被改、
+			# 对打静默错配"那个坑立的（2026-11-06 真踩到：B 侧没设 `nn_after_prune`，
+			# 改默认值之后同一句命令变成"剪枝前 vs 剪枝后"）。
+			if nn_b_path != "":
+				var cfg_pairs := {
+					"混合权重": [e_on.inner.w_external_prior, e_off.inner.w_external_prior],
+					"混合位置": [e_on.inner.ext_prior_after_prune, e_off.inner.ext_prior_after_prune],
+					"根宽": [e_on.root_width, e_off.root_width],
+					"pw": [e_on.inner.max_playouts, e_off.inner.max_playouts],
+				}
+				var cfg_diff: Array[String] = []
+				for k in cfg_pairs:
+					var pv2: Array = cfg_pairs[k]
+					if pv2[0] != pv2[1]:
+						cfg_diff.append("%s A=%s B=%s" % [k, str(pv2[0]), str(pv2[1])])
+				if not cfg_diff.is_empty():
+					print("[yemaduel] ✗ 两侧配置不一致 ⇒ 量的是配置差不是权重差：%s" % str(cfg_diff))
+					komi = komi_bak
+					_quiet_place = quiet_bak
+					get_tree().quit(1)
+					return
 			var passes := 0
 			var moves := 0
 			var illegal := 0
@@ -24180,6 +28497,34 @@ func _ai_spec_probe() -> void:
 	var na := 0
 	var nb := 0
 	var illegal_all := 0
+	## ★ 2026-11-07 存在性判据（§96/§138）：价值网络**真跑了几次**。
+	##   `value_net_enabled=true` 只是"想开"，装载失败会静默回退 area1（`_ensure_value_net()`
+	##   里那条 `✗` 只印一次、还夹在几百行日志里）⇒ 「开着但一次没跑」与「跑了但没差别」
+	##   长得一样。这里按侧累计 `_vn_calls`，收尾跟 `enabled` 对照着判。
+	var vn_a := 0
+	var vn_b := 0
+	## ★ 叶子分 σ（跨手均值）—— **只用于诊断**，不参与任何分支。
+	##   `_result_impl()` 把裸目差压成 `0.5+0.5·tanh(rel/score_soft)`，而 `rel` 先被
+	##   `sqrt(n)·dynamic_center_scale ≈ 10.95`（n=120）夹断 ⇒ **σ 大的评估器会把叶子分
+	##   挤到两端**（贴住 0.042 / 0.958），Q 失去分辨力、PUCT 探索项反过来主导搜索；
+	##   而它的**排序**照样是对的。⇒ 只看胜负分不清是「评估器更准」还是「σ 更合身」
+	##   （§133：一个量服务两个语义就该拆开）。σ 由 `_dc_finalize()` 维护，零新增成本。
+	var sd_a := 0.0
+	var sd_b := 0.0
+	var sd_na := 0
+	var sd_nb := 0
+	var soft_seen := 0.0
+	## ★ 根节点对抗复核的存在性判据（§96/§138）：`root_check_enable=true` 那一侧
+	##   改选次数必须是 **>0**，另一侧必须是 **0**。两边都 0 ⇒ 复核一次没跑或一次没改选，
+	##   此时"胜负 50%"读起来像"复核无用"，其实可能是"根本没执行"。
+	var rc_a_sw := 0
+	var rc_b_sw := 0
+	var rc_a_ck := 0
+	var rc_b_ck := 0
+	var rc_a_gap_sum := 0.0
+	var rc_a_gap_max := -1.0e9
+	var rc_a_gap_n := 0
+	var rc_a_margin := 0.0
 	var detail: Array[String] = []
 	var t0: int = Time.get_ticks_usec()
 	var gi := 0
@@ -24217,6 +28562,32 @@ func _ai_spec_probe() -> void:
 				eb.obvious_early_stop = false
 			for k in ov_b.keys():
 				eb.set(k, ov_b[k])
+			# ★★ 2026-11-07 配平闸（§159 的思想）：`a=`/`b=` 只是**要写进去的字面量**，
+			#   真正生效的是**引擎上的值**。`_ai_spec_parse` 已经拦掉"键不存在"，
+			#   但拦不住「键对、值也写进去了、却恰好等于对方的默认值」—— 那就是 A 打 A，
+			#   而报告照样印胜率与 z 值（§110/§106 最贵的那族错）。
+			#   ⇒ 首局按**生效值**逐键比一次；所有被覆盖键一个都没差 ⇒ 拒绝出数。
+			if gi == 1:
+				var keys_all := {}
+				for k in ov_a.keys():
+					keys_all[k] = true
+				for k in ov_b.keys():
+					keys_all[k] = true
+				var eff_line: Array[String] = []
+				var eff_diff: Array[String] = []
+				for k in keys_all.keys():
+					var va: Variant = ea.get(k)
+					var vb: Variant = eb.get(k)
+					eff_line.append("%s(A=%s,B=%s)" % [k, str(va), str(vb)])
+					if str(va) != str(vb):
+						eff_diff.append(str(k))
+				print("[aispec] 生效值（首局）：%s" % " · ".join(eff_line))
+				if eff_diff.is_empty():
+					print("[aispec] ✗ 两臂的**生效值完全相同** ⇒ 这是 A 打 A，有效分母无意义 ⇒ 拒绝出数")
+					print("[aispec]   （常见成因：写进去的值正好等于对方默认值；或该键在引擎里有"
+						+ "「装载失败就静默回退」的行为）")
+					get_tree().quit(1)
+					return
 			var passes := 0
 			var moves := 0
 			var illegal := 0
@@ -24263,6 +28634,25 @@ func _ai_spec_probe() -> void:
 			detail.append("%d手 %d:%d 胜=%s" % [moves, a_total, b_total, winner])
 			print("[aispec] 局 %d 黑=%s → A %d : B %d 胜=%s | 手数=%d 非法=%d"
 				% [gi, "B" if b_is_black else "A", a_total, b_total, winner, moves, illegal])
+			rc_a_sw += ea.rc_switched_total
+			rc_b_sw += eb.rc_switched_total
+			rc_a_ck += ea.rc_checks_total
+			rc_b_ck += eb.rc_checks_total
+			vn_a += ea._vn_calls
+			vn_b += eb._vn_calls
+			sd_a += ea._dc_std_sum
+			sd_na += int(ea._dc_std_cnt)
+			sd_b += eb._dc_std_sum
+			sd_nb += int(eb._dc_std_cnt)
+			if soft_seen == 0.0:
+				soft_seen = ea.score_soft
+			# 灵敏度只统计**开了复核**的那一侧（关侧恒为 0，混进来会把均值拉低）
+			for _e in [ea, eb]:
+				if _e.rc_gap_n > 0:
+					rc_a_gap_sum += _e.rc_gap_sum
+					rc_a_gap_n += _e.rc_gap_n
+					rc_a_gap_max = maxf(rc_a_gap_max, _e.rc_gap_max)
+					rc_a_margin = maxf(rc_a_margin, _e.root_check_margin)
 	komi = komi_bak
 	_quiet_place = quiet_bak
 	_superko_enforce = sk_bak
@@ -24273,6 +28663,29 @@ func _ai_spec_probe() -> void:
 	print("[aispec] superko 历史条目=%d（≤1 ⇒ 没在记，`sk` 是空操作；仅 `sk` 模式有意义）"
 		% [_superko_hist.size()])
 	print("[aispec] 总账：A %d 胜 / B %d 胜 / 和 %d（%d 局换色）" % [a_wins, b_wins, draws, gi])
+	# ★ 存在性判据（§96/§138）：复核侧必须「真跑了」且「真改选过」，否则 50% 无意义
+	print("[aispec] 根节点复核：A 执行 %d 手/改选 %d 手 | B 执行 %d 手/改选 %d 手%s"
+		% [rc_a_ck, rc_a_sw, rc_b_ck, rc_b_sw,
+			"（✗ 两侧都 0 ⇒ 复核没跑，本轮数据对复核结论无效）" if rc_a_ck + rc_b_ck == 0 else ""])
+	# ★ 灵敏度（§33）：`gap` 远小于阈值 ⇒ 改选恒 0 是"阈值太高"，不是"复核无用"
+	print("[aispec] 复核灵敏度：gap 均值 %+.4f / 最大 %+.4f（n=%d，阈值 %.4f）%s"
+		% [rc_a_gap_sum / float(maxi(rc_a_gap_n, 1)), rc_a_gap_max, rc_a_gap_n, rc_a_margin,
+			"（✗ 最大 gap < 阈值 ⇒ 本轮不可能改选，结论无分辨力）" if rc_a_gap_max < rc_a_margin else ""])
+	# ★ 价值网络存在性（§96/§138）：只在本次 spec 真的动过这个键时才印，
+	#   别给别的 A/B 添噪。`开着但前向 0 次` = 装载失败后静默回退 area1 = A 打 A。
+	if ov_a.has("value_net_enabled") or ov_b.has("value_net_enabled"):
+		var ea_on: bool = bool(ov_a.get("value_net_enabled", false))
+		var eb_on: bool = bool(ov_b.get("value_net_enabled", false))
+		var vn_bad: bool = (ea_on and vn_a == 0) or (eb_on and vn_b == 0)
+		print("[aispec] 价值网络：A 开=%s 前向 %d 次 | B 开=%s 前向 %d 次%s"
+			% [str(ea_on), vn_a, str(eb_on), vn_b,
+				" ← ✗ 开着却一次没跑（装载失败？）⇒ 该侧已静默回退 area1，本轮不许当结论" if vn_bad else ""])
+	# ★ 叶子分 σ（诊断）：与胜负分开报。σ 差异大 ⇒ 「评估器好坏」与「效用尺度是否合身」
+	#   两个解释分不开，别把胜率直接读成评估器质量（§133）。
+	print("[aispec] 叶子分 σ（跨手均值）：A %.2f（%d 手）/ B %.2f（%d 手）｜ score_soft=%.1f cap≈%.1f%s"
+		% [sd_a / float(maxi(sd_na, 1)), sd_na, sd_b / float(maxi(sd_nb, 1)), sd_nb,
+			soft_seen, sqrt(float(tiles.size())),
+			"  ← σ 差 >2× ⇒ 胜率里混了「尺度合不合身」，不是纯评估器质量" if _sd_ratio_warn(sd_a, sd_na, sd_b, sd_nb) else ""])
 	print("[aispec] 目差：B − A 合计 %+d 均值 %+.1f（正 = B 领先）"
 		% [diff_sum, float(diff_sum) / float(maxi(gi, 1))])
 	print("[aispec] 每手平均耗时：A %.0fms / B %.0fms（比 %.2f）"
@@ -24293,9 +28706,406 @@ func _ai_spec_probe() -> void:
 	get_tree().quit()
 
 
+## `--aispec` 诊断用：两侧 σ 是否差到「胜率不能直接读成评估器质量」的程度。
+## 阈值 2× 是**工作点**不是定律：σ 进 tanh 的**斜率**，2× 已足以让夹断区占比差一倍以上。
+func _sd_ratio_warn(sa: float, na: int, sb: float, nb: int) -> bool:
+	if na == 0 or nb == 0:
+		return false
+	var a: float = sa / float(na)
+	var b: float = sb / float(nb)
+	if a <= 0.0 or b <= 0.0:
+		return false
+	return maxf(a, b) / mini(a, b) > 2.0
+
+
 ## `--aispec` 用：把 `k=v,k=v` 解析成**类型化**覆盖字典。
 ## 错误一律收进 `errs`、不在这里退出 —— 让调用方**一次性**把全部问题印出来再判失败。
 ## 半截生效的 spec 是最难查的一种（报告看起来正常），所以宁可一条都不生效。
+# ============================================================================
+# 仪器（--aiduel，2026-11-04）：**四款 AI 任意两两**配对换色对打
+# ----------------------------------------------------------------------------
+# 用法：`--aiduel=rock-flow:r3:ms200:m260:s20261104`
+#   侧名 rock=磐石(`AIEngine`) / flow=流水(`LiushuiAI`) / yema=野马(`YemaAI`) /
+#        xg=疾风(`_xg_choose_move()`，固定算法，不吃预算)
+#   rN 轮数（每轮 2 局换色，默认 2）｜msN 每手预算 ms（默认 `GameConfig.ai_time_ms`）
+#   mN 单局手数上限（默认 260）｜sN 基准种子（第 i 局 = 基准 + i*97）｜tN 线程数（默认生产配置）
+# 纪律与 `--xgduel` 一致：komi=0 · 换色配对 · **双方各自自然速度**（不拉平预算 ——
+#   玩家面对的就是各自真实的每手耗时）。
+# 读数只认：胜率 + 符号检验 + 每手耗时。★ **目差不是棋力**（MEMORY #11：被手数带着走）。
+# ★ 为什么另起一个仪器：「流水」立项至今**没有任何对打数据**（只有 `--liushuitest` 接线自检），
+#   而 10-27~11 的磐石改动（cap 0.1 / influence 加固 / 提子项关）让 10 月那批
+#   `--xgduel`(50 局) 与 `--yemaduel`(12 局) 的数字全部过期。
+func _aiduel_make(kind: String, color: int, seed_i: int, budget: int, threads_ov: int):
+	match kind:
+		"rock":
+			var e := AIEngine.new()
+			e.setup(adjacency, color, seed_i)
+			e.threads = threads_ov
+			e.time_budget_ms = budget
+			e.max_playouts = 1000000          # 兜底，永不到 ⇒ 时间预算是唯一停止条件
+			return e
+		"yema":
+			var y := YemaAI.new()
+			y.setup(adjacency, color, seed_i)
+			y.threads = threads_ov
+			y.time_budget_ms = budget
+			return y
+		"flow":
+			var f := LiushuiAI.new()
+			f.setup(adjacency, color, seed_i)
+			f.time_budget_ms = budget
+			return f
+	return null                                # xg：不是对象（走 game.gd 自己的函数）
+
+
+func _aiduel_move(kind: String, e, color: int) -> int:
+	if kind == "xg":
+		return _xg_choose_move(color)
+	return int(e.choose_move(board, ko_point, color))
+
+
+## 疾风旋钮的 `pa=`/`pb=` 解析（2026-11-04）。
+## ★ 为什么必须有它：疾风**不是引擎对象**（`_aiduel_make("xg")` 返回 null，它走
+##   `game.gd` 自己的 `_xg_choose_move()`），所以 `_aiduel_apply()` 那段
+##   `if ea != null and raw_pa != ""` 对疾风**永远不执行** ⇒ 写 `pa=xg_top_k=24`
+##   会静默退化成 **A 打 A**。实测症状：`top_k` 12→24 本应更慢，两侧却都是 49ms；
+##   比分 9:6（z=+0.77，正是零假设的样子）。守卫当时只比了"参数字符串不同"，
+##   没验"这些参数能不能真的落到一侧" —— 与 §33「死参数」同一个坑。
+func _aiduel_xg_parse(raw: String, tag: String) -> Dictionary:
+	var d := {}
+	for kv in raw.split(",", false):
+		var p: PackedStringArray = kv.split("=")
+		if p.size() != 2:
+			print("[aiduel] ✗ %s「%s」不是 k=v 形式" % [tag, kv])
+			get_tree().quit(1)
+			return {}
+		var k: String = p[0].strip_edges()
+		if not _xg_knob_key_ok(k):
+			print("[aiduel] ✗ %s 疾风旋钮「%s」不存在（可用：%s）"
+				% [tag, k, XG_KNOB_PROPS.keys()])
+			get_tree().quit(1)
+			return {}
+		d[k] = float(p[1].strip_edges())
+	return d
+
+
+## 走某一侧之前把**这一侧该有的**旋钮套上（`_xg_apply_knobs` 是唯一真源，类型转换在里面）。
+## ★ 必须传 `base`：只给覆盖项而不还原基线 ⇒ 先走的一侧把旋钮留在那儿，后走的一侧
+##   **直接继承** ⇒ 两臂其实是同一套旋钮。实测症状（2026-11-04 冒烟）：
+##   `topk` 扫 4 / 12 / 48 时总耗时确实是 38 / 99 / 375ms（参数生效），但**每一档 A 与 B
+##   逐位相同** ⇒ 比分是 2:2、1:1 这类"体面阴性结果"，读起来像"这个旋钮没用"。
+##   这是本工程最贵的一类假数据（§110 参照物与被测物同退化）。
+func _aiduel_xg_use(ov: Dictionary, base: Dictionary, tag: String) -> void:
+	var full: Dictionary = base.duplicate()
+	for k in ov:
+		full[k] = ov[k]
+	_xg_apply_knobs(full)
+	if not ov.is_empty() and not _xg_knobs_verify(ov, "aiduel-" + tag):
+		print("[aiduel] ✗ 疾风旋钮回读不符 ⇒ 这一轮是假的 A/B，拒绝出数")
+		get_tree().quit(1)
+
+
+## 把 `pa=`/`pb=` 的 `k=v` 串写到引擎上。键必须真存在 —— `set("拼错的键", x)`
+## 不报错也不生效，会静默变成「A 打 A」（同 `_ai_spec_parse` 的那条守卫）。
+func _aiduel_apply(e, raw: String, tag: String) -> void:
+	for kv in raw.split(",", false):
+		var parts: PackedStringArray = kv.split("=")
+		if parts.size() != 2:
+			print("[aiduel] ✗ %s「%s」不是 k=v 形式" % [tag, kv])
+			get_tree().quit(1)
+			return
+		var k: String = parts[0].strip_edges()
+		var vs: String = parts[1].strip_edges()
+		var cur: Variant = e.get(k)
+		if cur == null:
+			print("[aiduel] ✗ %s 覆盖键「%s」在该引擎上不存在（拼错会被 set() 静默忽略）" % [tag, k])
+			get_tree().quit(1)
+			return
+		var v: Variant = null
+		if vs == "true" or vs == "false":
+			v = (vs == "true")
+		elif vs.contains(".") or vs.contains("e") or vs.contains("E"):
+			v = float(vs)
+		else:
+			v = int(vs)
+		if typeof(v) != typeof(cur):
+			print("[aiduel] ✗ %s「%s」类型不符：属性是 %s，写的是 %s（float 要写 1.0）"
+				% [tag, k, type_string(typeof(cur)), type_string(typeof(v))])
+			get_tree().quit(1)
+			return
+		e.set(k, v)
+
+
+## 本手耗时：对象引擎读它们自己的 `last_ms`（不含构造/建盘开销），xg 只能量墙钟。
+func _aiduel_ms(kind: String, e, wall_ms: int) -> int:
+	if kind == "xg":
+		return wall_ms
+	if kind == "yema":
+		return int(e.inner.last_ms)
+	return int(e.last_ms)
+
+
+func _ai_duel_probe() -> void:
+	var rounds := 2
+	var budget: int = GameConfig.ai_time_ms
+	var max_moves := 260
+	var base_seed := 20261104
+	# `o N`：**开局扰动**（2026-11-04）。0 = 关（历史口径逐字不变）。
+	# ★ 为什么必须有它：流水 `LiushuiAI` 是**实质确定性**引擎（全文件唯一 `rng` 调用在
+	#   `_pick_scramble_move()` 兜底分支，实战永不触发）⇒ `flow{X} vs flow{Y}` 每轮产出
+	#   逐位相同的同一盘。旧日志 `_aiduel_flow_headroom.log` 六局就是 137:124 / 135:128
+	#   各重复 3 次 ⇒ **有效分母 2，不是 6**，那行「z=+2.45 显著」是假的（§106）。
+	#   给了 `o` 之后，第 g 局的第一手固定落在 `(N + g*7) % 格数`，n 才真的变成 n。
+	var open_base := 0
+	var threads_ov: int = GameConfig.ai_threads
+	var side_a := "rock"
+	var side_b := "flow"
+	var raw_pa := ""
+	var raw_pb := ""
+	for a in _argv():
+		if not a.begins_with("--aiduel="):
+			continue
+		var toks: PackedStringArray = a.substr(9).split(":")
+		if toks.size() < 1 or not toks[0].contains("-"):
+			print("[aiduel] ✗ 第一段必须是 `<A>-<B>`（A/B ∈ rock|flow|yema|xg）")
+			get_tree().quit(1)
+			return
+		var pair: PackedStringArray = toks[0].split("-")
+		side_a = pair[0]
+		side_b = pair[1]
+		for ti in range(1, toks.size()):
+			var tok := toks[ti]
+			# `pa=k=v,k2=v2` / `pb=…`：把任意引擎属性写进对应一侧（`set()` 生效）。
+			# ★ 这是「流水从来没有调参通道」的补丁：它只有 `--liushuitest` 接线自检，
+			#   而 `--aispec` 写死了 `AIEngine`。有了这条，任何一侧的旋钮都能 A/B。
+			if tok.begins_with("pa="):
+				raw_pa = tok.substr(3)
+				continue
+			if tok.begins_with("pb="):
+				raw_pb = tok.substr(3)
+				continue
+			# ⚠️ `ms` 必须排在 `m` 之前判：`"ms200".begins_with("m")` 也是真，
+			#    反过来写会把 `ms200` 读成「手数上限 200」而不报错（§33 静默吃参数）。
+			if tok.begins_with("ms"):
+				budget = int(tok.substr(2))
+			elif tok.begins_with("m"):
+				max_moves = int(tok.substr(1))
+			elif tok.begins_with("r"):
+				rounds = int(tok.substr(1))
+			elif tok.begins_with("s"):
+				base_seed = int(tok.substr(1))
+			elif tok.begins_with("t"):
+				threads_ov = int(tok.substr(1))
+			elif tok.begins_with("o"):
+				open_base = int(tok.substr(1))
+			else:
+				print("[aiduel] ✗ 未知 token：「%s」（支持 rN/msN/mN/sN/tN/oN）" % tok)
+				get_tree().quit(1)
+				return
+	for sd in [side_a, side_b]:
+		if not (sd in ["rock", "flow", "yema", "xg"]):
+			print("[aiduel] ✗ 未知侧名：「%s」（支持 rock/flow/yema/xg）" % sd)
+			get_tree().quit(1)
+			return
+	# 同名只允许在**两侧参数不同**时（`pa=`/`pb=`）—— 那是同一引擎的旋钮 A/B，
+	# 不是"自己打自己"；两侧参数也相同才是无反例（§106 有效分母）。
+	if side_a == side_b and raw_pa == raw_pb:
+		print("[aiduel] ✗ A 与 B 同名且参数相同（「%s」）⇒ 自己打自己，有效分母无意义 ⇒ 拒绝出数" % side_a)
+		get_tree().quit(1)
+		return
+	if rounds <= 0 or max_moves <= 0:
+		print("[aiduel] ✗ 参数非法：rounds=%d max_moves=%d" % [rounds, max_moves])
+		get_tree().quit(1)
+		return
+
+	# 疾风旋钮走**每手切换**（它没有引擎对象可挂）。见 `_aiduel_xg_parse` 上方注释。
+	# ★ 顺手补一条守卫：`pa=` 写在疾风那侧、键却是引擎属性名（如 `prefilter_width`）
+	#   会被当成"不存在的疾风旋钮"炸掉 —— 这正是想要的行为（宁可炸，也别交假表）。
+	var xa_ov := {}
+	var xb_ov := {}
+	if side_a == "xg" and raw_pa != "":
+		xa_ov = _aiduel_xg_parse(raw_pa, "A")
+		if xa_ov.is_empty():
+			return
+	if side_b == "xg" and raw_pb != "":
+		xb_ov = _aiduel_xg_parse(raw_pb, "B")
+		if xb_ov.is_empty():
+			return
+	var xg_knobs_bak: Dictionary = _xg_knobs()
+	# 元断言（§117 / §110）：两臂的**有效旋钮**必须真的不同。只比 `pa=`/`pb=` 字符串
+	# 不够 —— `pa=topk=12` 与 `pb=`（默认 12）字符串不同、旋钮完全相同，那是 A 打 A。
+	var xg_switch: bool = (side_a == "xg" or side_b == "xg") \
+		and (not xa_ov.is_empty() or not xb_ov.is_empty())
+	if xg_switch and side_a == "xg" and side_b == "xg":
+		var ea_k: Dictionary = xg_knobs_bak.duplicate()
+		for k in xa_ov:
+			ea_k[k] = xa_ov[k]
+		var eb_k: Dictionary = xg_knobs_bak.duplicate()
+		for k in xb_ov:
+			eb_k[k] = xb_ov[k]
+		var same := true
+		for k in ea_k:
+			if absf(float(ea_k[k]) - float(eb_k[k])) > 0.0001:
+				same = false
+		if same:
+			print("[aiduel] ✗ 疾风两臂的**有效旋钮完全相同**（%s vs %s）⇒ 这是 A 打 A，"
+				% [xa_ov if not xa_ov.is_empty() else "默认",
+					xb_ov if not xb_ov.is_empty() else "默认"]
+				+ "有效分母无意义 ⇒ 拒绝出数（改一个真的不同的旋钮值再跑）")
+			get_tree().quit(1)
+			return
+
+	var komi_bak: float = komi
+	komi = 0.0
+	var quiet_bak: bool = _quiet_place
+	_quiet_place = true
+	var a_wins := 0
+	var b_wins := 0
+	var draws := 0
+	# 崩盘计数（2026-11-04）：硬结论 #11 —— `total = 子 + 领空 + 提子`（`rules_kernel.gd:304`），
+	# 长局提子线性膨胀 ⇒ **目差被手数带着走，不能当棋力指标**。真正区分强弱的是
+	# 「有没有一侧整盘被提光」这种形态（#2：疾风只赢崩盘率；#8：关 influence 反复崩到个位数）。
+	# 门槛 20 沿用 #8 的口径。
+	var a_low := 0
+	var b_low := 0
+	var ms_a := 0
+	var ms_b := 0
+	var na := 0
+	var nb := 0
+	var illegal_all := 0
+	# ★ 截断计数（2026-11-04）：`手数 == max_moves` 的局是**封盘点目**（两个 pass 没等到），
+	#   不是终局。旧版输出里这两者长得一模一样（都只有一个分数），读者会把
+	#   「在 260 手被砍断时的目差」当成「终局目差」——铁律 §96 同族病：跑到了 ≠ 跑完了。
+	var truncated := 0
+	var detail: Array[String] = []
+	var t0: int = Time.get_ticks_usec()
+	var gi := 0
+	print("[aiduel] 盘=%s 格数=%d | A=%s{%s} vs B=%s{%s} | 预算 %dms/手 | 线程 %d%s | komi=0 | %d 轮（每轮 2 局换色）%s"
+		% [_bt_name(GameConfig.board_type), tiles.size(), side_a,
+			"默认" if raw_pa == "" else raw_pa, side_b,
+			"默认" if raw_pb == "" else raw_pb, budget,
+			threads_ov, "（自动=生产）" if threads_ov == 0 else "", rounds,
+			"｜开局扰动 o%d（逐**轮** +7 格，同一轮两局共用同一开局格）" % open_base if open_base > 0 else ""])
+	for _r in rounds:
+		for flip in 2:
+			var b_is_black: bool = (flip == 0)
+			var seed_i: int = base_seed + gi * 97
+			gi += 1
+			game_mode = LOCAL
+			reset_game(true)
+			var ea = _aiduel_make(side_a, Stone.WHITE if b_is_black else Stone.BLACK, seed_i, budget, threads_ov)
+			var eb = _aiduel_make(side_b, Stone.BLACK if b_is_black else Stone.WHITE, seed_i, budget, threads_ov)
+			# 覆盖放在构造之后（同 `--aispec` 的口径：`a=`/`b=` 必须压过默认赋值）
+			if ea != null and raw_pa != "":
+				_aiduel_apply(ea, raw_pa, "A")
+			if eb != null and raw_pb != "":
+				_aiduel_apply(eb, raw_pb, "B")
+			var passes := 0
+			var moves := 0
+			var illegal := 0
+			# `o N`：开局扰动按**轮**取格（同一轮的两局共用同一个开局格）⇒ 换色才是真配对；
+			# 步长 7 与常见格数（120 / 360）互质，相邻轮落在互不相同的格点上。
+			# 它计入 `moves`：否则撞上限时的截断判断会少算这一手。
+			if open_base > 0:
+				var oc: int = (open_base + _r * 7) % tiles.size()
+				if board[oc] != Stone.EMPTY or oc == ko_point or not place_stone(oc, false):
+					print("[aiduel] ✗ 开局扰动落子失败：格 %d（占用=%d ko=%d）⇒ 拒绝出数"
+						% [oc, board[oc], ko_point])
+					get_tree().quit(1)
+					return
+				moves += 1
+			while passes < 2 and moves < max_moves:
+				var turn_color: int = current_player
+				var b_turn: bool = (turn_color == Stone.BLACK) == b_is_black
+				# 旋钮切换放在计时**之前**：`ms` 要量的是这一手本身的搜索成本，
+				# 把切旋钮的赋值算进去会让两臂都虚高（且高得不对称）。
+				# 两侧都要切（各带 `base`），否则后走的一侧继承前一侧的旋钮。
+				if xg_switch:
+					if b_turn:
+						_aiduel_xg_use(xb_ov, xg_knobs_bak, "B")
+					else:
+						_aiduel_xg_use(xa_ov, xg_knobs_bak, "A")
+				var mt0 := Time.get_ticks_msec()
+				var mv := -1
+				if b_turn:
+					mv = _aiduel_move(side_b, eb, turn_color)
+					ms_b += _aiduel_ms(side_b, eb, Time.get_ticks_msec() - mt0)
+					nb += 1
+				else:
+					mv = _aiduel_move(side_a, ea, turn_color)
+					ms_a += _aiduel_ms(side_a, ea, Time.get_ticks_msec() - mt0)
+					na += 1
+				if mv < 0 or mv >= tiles.size() or board[mv] != Stone.EMPTY or mv == ko_point:
+					if mv >= 0:
+						illegal += 1
+					passes += 1
+				elif place_stone(mv, false):
+					moves += 1
+					passes = 0
+				else:
+					illegal += 1
+					passes += 1
+				if current_player == turn_color:      # 停一手/被拒不换行棋方 → 手动交换
+					current_player = Stone.WHITE if turn_color == Stone.BLACK else Stone.BLACK
+			var sc: Dictionary = _compute_scores()
+			var pb_s: int = int(sc.get("total_black", 0))
+			var pw_s: int = int(sc.get("total_white", 0))
+			var b_total: int = pw_s if b_is_black else pb_s
+			var a_total: int = pb_s if b_is_black else pw_s
+			illegal_all += illegal
+			var winner := "和"
+			if b_total > a_total:
+				b_wins += 1
+				winner = "B"
+			elif a_total > b_total:
+				a_wins += 1
+				winner = "A"
+			else:
+				draws += 1
+			if moves >= max_moves:
+				truncated += 1
+			if a_total <= 20:
+				a_low += 1
+			if b_total <= 20:
+				b_low += 1
+			detail.append("%d手 %d:%d 胜=%s%s" % [moves, a_total, b_total, winner,
+				" ★截断" if moves >= max_moves else ""])
+			print("[aiduel] 局 %d 黑=%s → A %d : B %d 胜=%s | 手数=%d 非法=%d%s"
+				% [gi, "B" if b_is_black else "A", a_total, b_total, winner, moves, illegal,
+					" | ★截断（封盘点目，非终局）" if moves >= max_moves else ""])
+	komi = komi_bak
+	_quiet_place = quiet_bak
+	_xg_apply_knobs(xg_knobs_bak)          # 疾风旋钮还原（跑到最后的未必是"默认"那一臂）
+	print("[aiduel] 总账：A(%s) %d 胜 / B(%s) %d 胜 / 和 %d（%d 局换色）"
+		% [side_a, a_wins, side_b, b_wins, draws, gi])
+	# ★ 截断统计必须单列一行：`m=max_moves` 的局分数是封盘点目，
+	#   与"自然终局"不可混为一谈（>0 时胜率要打折看，或把 m 调大重跑）。
+	print("[aiduel] 截断局 %d/%d（m=%d）%s"
+		% [truncated, gi, max_moves,
+			" ← **有局是被手数上限砍断的，比分=封盘点目**" if truncated > 0 else "（全部真终局）"])
+	# 崩盘率比"目差"可信：见上方 `a_low` 声明处（硬结论 #11 / #2 / #8）。
+	print("[aiduel] 崩盘（该侧得分≤20）：A(%s) %d/%d 局｜B(%s) %d/%d 局%s"
+		% [side_a, a_low, gi, side_b, b_low, gi,
+			"（目差不可当棋力指标：比分含提子，随手数膨胀）"])
+	print("[aiduel] 每手平均耗时：A %.0fms / B %.0fms（比 %.2f）"
+		% [float(ms_a) / float(maxi(na, 1)), float(ms_b) / float(maxi(nb, 1)),
+			float(ms_b) / float(maxi(ms_a, 1))])
+	var n_dec: int = a_wins + b_wins
+	if n_dec > 0:
+		# 统一口径：z 以 **A** 为被测方（A 胜率 > 50% ⇒ z>0）
+		var z: float = (float(a_wins) - float(n_dec) * 0.5) / sqrt(float(n_dec) * 0.25)
+		print("[aiduel] 符号检验（只看分出胜负的 %d 局）：A(%s) 胜率 %.1f%% · z=%+.2f%s"
+			% [n_dec, side_a, 100.0 * float(a_wins) / float(n_dec), z,
+				" ← 显著" if absf(z) >= 1.96 else "（|z|<1.96 ⇒ 未定，不许当结论）"])
+	else:
+		print("[aiduel] ✗ 有效分母为 0：一局都没分出胜负 ⇒ 本轮无分辨力")
+	print("[aiduel] 非法着法 %d 次%s" % [illegal_all,
+		"（>0 ⇒ 数据要打折看）" if illegal_all > 0 else "（=0 ⇒ 双方着法全合法）"])
+	print("[aiduel] 明细 %s" % str(detail))
+	print("[aiduel] 耗时 %.1fs" % (float(Time.get_ticks_usec() - t0) / 1.0e6))
+	get_tree().quit(0)
+
+
 func _ai_spec_parse(e: AIEngine, raw: String, tag: String, errs: Array[String]) -> Dictionary:
 	var out := {}
 	for kv in raw.split(",", false):
@@ -25893,3 +30703,472 @@ func _pris_probe_once(e: AIEngine, bd: Dictionary, v: int, on: bool) -> Dictiona
 func _pris_score_from_result(r: float, soft: float) -> float:
 	var x: float = clampf(2.0 * r - 1.0, -0.999999, 0.999999)
 	return 0.5 * log((1.0 + x) / (1.0 - x)) * maxf(soft, 0.5)
+
+
+# ============================================================================
+# 自检（--aivaltest）**价值网络当叶子评估**的接线（2026-11-07）
+# ============================================================================
+## 被测对象：`AIEngine.value_net_enabled` / `value_net_path` + `_ensure_value_net()`
+##   + `_leaf_static_score()` + `_copy_params_from()` 的同步。
+##
+## 【为什么必须有一条不靠对打的判据】与 `--aipristest` 同族，四种坏法全是**静默**的：
+##   ① `@export` 没同步进 `_copy_params_from()` ⇒ 主引擎走网络、worker 走 area1
+##      ⇒ 多线程下合并的是两种评估器的选点（而 `t1` 的对打根本看不见这一条）；
+##   ② 喂错对象（盘面 / 行棋方 / 手数任一处）⇒ 前向照样输出一个"看着像回事"的目差；
+##   ③ `set_state_packed()` 没被调用 ⇒ 网络一直读**上一次**的盘 ⇒ 分数不随局面变；
+##   ④ λ 口径搞错 ⇒ 算出来又被 `_result_impl()` 乘成 0（`eval_mix_lambda<=0` 时）。
+##   四种都会让 A/B 呈现「没差别」，然后被读成「价值网络没用」（§33/§138/§106）。
+##
+## 【参照物是谁】另造一个**独立的** `NnValue` 实例，喂同一份 `_b` 手动前向。
+##   ⚠️ 它用的是**同一份权重**——这不是"两个模型比精度"，而是"同一套前向的两份接线"。
+##   前向本身已经被 `--valuetest` 的 24 局面对拍钉死（最大差 4.5e-5 目）；
+##   本判据只管**接线**：引擎有没有把正确的盘面/行棋方/手数喂进去、分有没有真的走到效用里。
+##
+## 确定性：无搜索、无线程、无随机器 ⇒ 全部是**等式**断言，不是阈值（同 `--aipristest`）。
+func _ai_value_term_test() -> void:
+	var fails: Array[String] = []
+	var e := AIEngine.new()
+	e.setup(adjacency, Stone.BLACK)
+	var nt := e.n                       # 盘上格数**以引擎自己那份为准**（它才是被测对象）
+	# ---------------- ⓪ 有效分母守卫 ----------------
+	# 权重是在 n=120 的彭罗斯盘上训的；盘不符时前向**照样能跑出数**（mean 池化与盘点数
+	# 无关），只是那个数没有标定过 ⇒ 拿它当判据就是拿一个 `[未测]` 当基线（§106/§116）。
+	if nt != 120:
+		print("[aivaltest] ✗ 盘 n=%d ≠ 120：权重是在 n=120 的彭罗斯盘上训的 ⇒ 本判据无有效分母" % nt)
+		print("[aivaltest]   修法：加 `--penrose=4:0.82`（= 菜单旧中档那张 120 格盘）")
+		print("[aivaltest] 结论：失败 ✗ [盘不符，有效分母 0]")
+		get_tree().quit(1)
+		return
+	e.threads = 1
+	e.dynamic_center_enabled = false   # 重定心会改 `_result()` 的可逆性（⑤ 靠反解）
+	e.dead_penalty = false             # 死子修正只影响 `_area_score()`，关掉让 ① 更纯粹
+	e.count_prisoners = false          # 提子项的开关是 `--aipristest` 的事
+	var wpath: String = e.value_net_path
+	# ---------------- 参照物（独立实例，同一份权重） ----------------
+	var ref := NnValue.new()
+	ref.setup(adjacency)
+	if not ref.load_weights(wpath):
+		print("[aivaltest] ✗ 参照物装载失败：%s（%s）⇒ 有效分母 0" % [ref.err, wpath])
+		print("[aivaltest] 结论：失败 ✗ [权重不可用]")
+		get_tree().quit(1)
+		return
+	# ---------------- 造局：交替铺 + 每 5 格一空（≈80% 填充，接近中盘） ----------------
+	var bd_a := {}
+	var bd_b := {}
+	for i in nt:
+		var c: int = Stone.EMPTY
+		if i % 5 != 0:
+			c = Stone.BLACK if (i % 2 == 0) else Stone.WHITE
+		bd_a[i] = c
+		bd_b[i] = c
+	# bd_b = bd_a 把末尾 20 个非空点整片翻色 ⇒ 目差必然大幅变动（③ 的真信号）
+	var flipped := 0
+	for i in range(nt - 1, -1, -1):
+		if flipped >= 20:
+			break
+		var ci: int = int(bd_a[i])
+		if ci == Stone.EMPTY:
+			continue
+		bd_b[i] = Stone.WHITE if ci == Stone.BLACK else Stone.BLACK
+		flipped += 1
+
+	var PLY := 40
+	# ---------------- ① 关态：必须逐位等于 `_area_score() + _pris_term()` ----------------
+	e.value_net_enabled = false
+	e.eval_mix_lambda = 0.0
+	e.load_board_for_probe(bd_a, -1)
+	e._ply = PLY
+	e._turn = Stone.WHITE
+	var off_v: float = e._leaf_static_score()
+	var off_ab: float = e._last_area_black
+	var off_aw: float = e._last_area_white
+	var c1: bool = off_v == e._area_score() + e._pris_term()
+
+	# ---------------- ② 开态：与独立参照物逐位相等（盘面/手数/行棋方全对齐） ----------------
+	e.value_net_enabled = true
+	e.eval_mix_lambda = 1.0
+	e.load_board_for_probe(bd_a, -1)
+	e._ply = PLY
+	e._turn = Stone.WHITE
+	var on_v: float = e._leaf_static_score()
+	var ref_v: float = ref.value_of_packed(e._b, PLY, Stone.WHITE) + e.komi
+	var c2: bool = off_v != on_v and absf(on_v - ref_v) < 1.0e-9
+
+	# ---------------- ③ 真信号：换盘面必须变（否则网络在读陈旧盘面） ----------------
+	e.load_board_for_probe(bd_b, -1)
+	e._ply = PLY
+	e._turn = Stone.WHITE
+	var on_vb: float = e._leaf_static_score()
+	var ref_vb: float = ref.value_of_packed(e._b, PLY, Stone.WHITE) + e.komi
+	var c3: bool = absf(on_vb - ref_vb) < 1.0e-9 and absf(on_vb - on_v) > 0.01
+
+	# ---------------- ④ 全局特征真的喂进去了（行棋方 / 手数各一） ----------------
+	e._turn = Stone.BLACK
+	var on_vk: float = e._leaf_static_score()
+	var ref_vk: float = ref.value_of_packed(e._b, PLY, Stone.BLACK) + e.komi
+	e._turn = Stone.WHITE
+	e._ply = PLY + 60
+	var on_vp: float = e._leaf_static_score()
+	var ref_vp: float = ref.value_of_packed(e._b, PLY + 60, Stone.WHITE) + e.komi
+	var dk: float = absf(on_vk - on_vb)
+	var dp: float = absf(on_vp - on_vb)
+	var c4: bool = absf(on_vk - ref_vk) < 1.0e-9 and absf(on_vp - ref_vp) < 1.0e-9 \
+		and dk > 0.01 and dp > 0.01
+
+	# ---------------- ⑤ 端到端：λ=1 时 `_result()` 反解出的目差 == 网络分（精确等式） ----------------
+	e.load_board_for_probe(bd_a, -1)
+	e._ply = PLY
+	e._turn = Stone.WHITE
+	var v5: float = e._leaf_static_score()
+	var back5 := _pris_score_from_result(e._result(v5), e.score_soft)
+	var in_range: bool = absf(v5) <= 45.0
+	var c5: bool = in_range and absf(back5 - v5) < 1.0e-3
+	# `_result_impl()` 里 `sc = _area_score() + _pris_term()` 仍会跑（写分析层读数）
+	var on_ab: float = e._last_area_black
+	var on_aw: float = e._last_area_white
+
+	# ---------------- ⑥ 分析层读数未被污染（`_last_area_*` 两态相同） ----------------
+	var c6: bool = off_ab == on_ab and off_aw == on_aw
+
+	# ---------------- ⑦ 多线程同步：`_copy_params_from()` 必须带上这两个键 ----------------
+	var dst := AIEngine.new()
+	dst._copy_params_from(e)
+	var c7: bool = dst.value_net_enabled == e.value_net_enabled \
+		and dst.value_net_path == e.value_net_path and dst.value_net_enabled
+
+	# ---------------- ⑧ 耗时读数（不是判据，是成本表：A/B 的预算就靠它） ----------------
+	e.load_board_for_probe(bd_a, -1)
+	e._ply = PLY
+	e._turn = Stone.WHITE
+	e._vn_us = 0
+	e._vn_calls = 0
+	var K := 50
+	for _k in K:
+		e._leaf_static_score()
+	var us_per: float = float(e._vn_us) / float(maxi(e._vn_calls, 1))
+
+	print("[aivaltest] 生效值：enabled=%s path=%s n=%d h=%d 层=%d λ=%.1f komi=%.1f"
+		% [str(e.value_net_enabled), wpath, nt, ref.h_dim, ref.layers, e.eval_mix_lambda, e.komi])
+	print("[aivaltest] ① 关态逐位等价 area1 %s（%.6f）" % ["✓" if c1 else "✗", off_v])
+	print("[aivaltest] ② 开态=网络+komi %s（网络 %.4f 目 · 参照 %.4f 目 · 关态 %.4f）"
+		% ["✓" if c2 else "✗", on_v, ref_v, off_v])
+	print("[aivaltest] ③ 换盘面必须变 %s（20 点翻色后 %.4f 目，Δ%.4f）"
+		% ["✓" if c3 else "✗", on_vb, on_vb - on_v])
+	print("[aivaltest] ④ 行棋方/手数真喂进去了 %s（换色 Δ%.4f 目 · 换手数 Δ%.4f 目）"
+		% ["✓" if c4 else "✗", dk, dp])
+	print("[aivaltest] ⑤ 端到端可逆：_result 反解 %.6f vs 网络 %.6f %s%s"
+		% [back5, v5, "✓" if c5 else "✗",
+			"" if in_range else " ← 判据无分辨力（|分|>45 已在 tanh 饱和区，方向:先换均衡盘）"])
+	print("[aivaltest] ⑥ 分析层读数未污染 %s（黑 %s/%s 白 %s/%s）"
+		% ["✓" if c6 else "✗", str(off_ab), str(on_ab), str(off_aw), str(on_aw)])
+	print("[aivaltest] ⑦ 多线程同步（copy 带上两键） %s" % ["✓" if c7 else "✗"])
+	print("[aivaltest] ⑧ 耗时 %.1f µs/次 · n=%d（`_area_score()` 约 87 µs ⇒ 比 %.0f×）"
+		% [us_per, nt, us_per / 87.0])
+	for pair in [["①关态等价", c1], ["②开态=网络", c2], ["③换盘必须变", c3],
+			["④全局特征", c4], ["⑤端到端", c5], ["⑥分析层未污染", c6], ["⑦多线程同步", c7]]:
+		if not bool(pair[1]):
+			fails.append(str(pair[0]))
+	print("[aivaltest] 汇总：7 条判据（+1 项读数），失败 %d 条 %s"
+		% [fails.size(), "→ 通过 ✓" if fails.is_empty() else "→ 失败 ✗ " + str(fails)])
+	get_tree().quit(0 if fails.is_empty() else 1)
+
+# ====== 自检：--taunttest AI 台词（2026-11-02）======
+## 自检用：造一份局面快照（`Taunt.derive()` 认的那几个键）。
+## ★ 默认值刻意取**中性档**：ply=50（已过开局）、ai_diff=0、死块 0、提子 0、
+##   空点 60/120 = 50%。这样"想测妙手就必须显式覆盖 ai_diff"，不会出现
+##   "以为在测妙手、其实是别的东西在决定"。
+func _taunt_probe(over: Dictionary = {}) -> Dictionary:
+	var d := {
+		"ply": 50, "ai_diff": 0.0, "ai_dead": 0, "player_dead": 0,
+		"black_prisoners": 0, "white_prisoners": 0,
+		"mover_is_ai": true,
+		"empties": 60, "total_tiles": 120,
+	}
+	for k in over.keys():
+		d[k] = over[k]
+	return d
+
+
+## 自检用：两份快照 → **主动**意图标签。`derive`/`classify` 都是纯函数，**不碰池子**，
+## 所以这里可以 new 一个实例而不 `load_pool()`（少一次 IO，也少一个失败面）。
+func _taunt_cls(before: Dictionary, after: Dictionary) -> String:
+	var p := Taunt.new()
+	return p.classify(p.derive(after, before))
+
+
+## `--taunttest` 的收尾统计。两处调用（早退一次 / 正常跑完一次），口径必须一样，
+## 否则"早退那次"的分母看起来像"跑完了只有 1 条"。
+func _taunt_report(checks: Array) -> void:
+	var failed: Array[String] = []
+	for c in checks:
+		var okc := bool(c[1])
+		if not okc:
+			failed.append(str(c[0]))
+		print("[taunttest] %s %s（%s）" % [str(c[0]), "✓" if okc else "✗", str(c[2])])
+	print("[taunttest] 判据 %d 条，失败 %d 条%s" % [checks.size(), failed.size(),
+			"" if failed.is_empty() else ("：" + ", ".join(failed))])
+	print("[taunttest] 结论：", "通过 ✓" if failed.is_empty() and checks.size() > 0 else "失败 ✗")
+
+
+## 自检（--taunttest，2026-11-02 v2）：AI 台词 —— 主动（妙手）+ 被动（回话）。
+## ★ 不测的东西（刻意）：句子的**好坏**。文案质量是离线那一环的事（大模型出候选 + 人过一遍），
+##   判据能钉住的只有"结构对"：该说的说了、不该说的沉默、槽位填了、冷却生效、
+##   跨局不认旧账、"有问必答"与"可以不回应"两端都在。
+##   把"文案好不好"写成判据只会得到一条永远绿的关键词匹配。
+func _taunt_self_test() -> void:
+	print("[taunttest] ===== AI 台词（主动=妙手 / 被动=回话）=====")
+	var checks: Array = []
+
+	var t := Taunt.new()
+	var ok_load := t.load_pool()
+	checks.append(["① 台词池读得进来｜ai/taunts.json 存在、JSON 合法、pool 与 chat_rules 非空",
+			ok_load and t.line_count() > 0,
+			"loaded=%s｜台词条数=%d｜错误「%s」" % [str(ok_load), t.line_count(), t.load_error]])
+	# ★ 池子读不进来就不必往后跑：后面每条都会红，但红的理由不是它自己写的那个
+	#   （§96 exit=0 ≠ 跑到了）。这里必须显式报出根因再收工。
+	if not ok_load or t.line_count() <= 0:
+		_taunt_report(checks)
+		get_tree().quit()
+		return
+
+	# ---- ② 池子键 == 「激活的意图」集合（双向）----
+	#   激活 = 主动的两类 + chat_rules 引用到的 + 兜底 chat_other。
+	#   缺 = 那一类静默沉默；多 = 写了永远不会被说出口的话（§33 死台词）。
+	var need: Array[String] = ["brilliant_opp", "brilliant_self", "chat_other"]
+	for k in t.rule_intents():
+		if not need.has(k):
+			need.append(k)
+	var have := t.intents()
+	var missing: Array[String] = []
+	for k in need:
+		if not have.has(k):
+			missing.append(k)
+	var extra: Array[String] = []
+	for k in have:
+		if not need.has(k):
+			extra.append(k)
+	checks.append(["② 池子键与激活的意图一一对应｜缺 = 那类沉默，多 = 永不触发的死台词",
+			missing.is_empty() and extra.is_empty(),
+			"缺=%s｜多=%s｜池子 %d 类 / 激活 %d 类" % [str(missing), str(extra), have.size(), need.size()]])
+
+	# ---- ③ 妙手正负成对：AI 妙手 / 玩家妙手 ----
+	#   ★ 两侧的"好事"是**相反符号**（AI 目差涨 = AI 妙手；跌 = 玩家妙手）。
+	#     只测一侧的话，把判定写成 `absf(dd) >= delta` 也会全绿，而那会把恶手也当妙手。
+	var base := _taunt_probe({"ai_diff": 0.0})
+	var c_ai := _taunt_cls(base, _taunt_probe({"ai_diff": 20.0, "mover_is_ai": true}))
+	var c_opp := _taunt_cls(base, _taunt_probe({"ai_diff": -20.0, "mover_is_ai": false}))
+	checks.append(["③ 妙手两侧各归其类｜AI 落子且目差 +20 →brilliant_self · 玩家落子且 -20 →brilliant_opp",
+			c_ai == "brilliant_self" and c_opp == "brilliant_opp",
+			"AI 妙手→%s｜玩家妙手→%s" % [c_ai, c_opp]])
+
+	# ---- ④ 不达阈值必须沉默 ----
+	#   ★ 这条是"主动聊天只发生在出现妙手时"这条口令的**负例**：
+	#     没有它，把 `brilliant_delta` 悄悄改成 0 也能让 ③ 全绿（那样每手都说话）。
+	var c_small := _taunt_cls(base, _taunt_probe({"ai_diff": 3.0, "mover_is_ai": true}))
+	checks.append(["④ 不到门槛不许开口｜Δ3 目 < brilliant_delta(%.1f) ⇒ 意图必须为空" % t.brilliant_delta,
+			c_small == "", "Δ3 目→「%s」（期望空）" % c_small])
+
+	# ---- ⑤ 无基准时不许判妙手 ----
+	var c_noprev := _taunt_cls({}, _taunt_probe({"ai_diff": 50.0, "mover_is_ai": true}))
+	checks.append(["⑤ 新局第一手不认旧账｜`_prev` 为空时 Δ 无意义 · 必须沉默而不是判成妙手",
+			c_noprev == "", "无基准 + 目差 50→「%s」（期望空）" % c_noprev])
+
+	# ---- ⑥ 冷却：妙手 / 冷却中沉默 / 冷却完了再能说 ----
+	var cool := Taunt.new()
+	cool.load_pool()
+	cool.cooldown_moves = 2
+	cool.reset()
+	var s0 := cool.on_move(base)                                  # 建基准
+	var s1 := cool.on_move(_taunt_probe({"ai_diff": 20.0}))       # 妙手 → 说
+	var s2 := cool.on_move(_taunt_probe({"ai_diff": 40.0}))       # 连续妙手，冷却中 → 沉默
+	checks.append(["⑥ 冷却只拦一句话｜cooldown=2 ⇒ 建基准沉默 / 妙手说 / 紧接的妙手沉默",
+			s0 == "" and s1 != "" and s2 == "",
+			"基准「%s」｜妙手「%s」｜连妙手「%s」" % [s0, s1, s2]])
+
+	# ---- ⑦ 回话的关键词意图（三条，覆盖"顺序敏感"那条：认输必须在赞扬之前）----
+	var m_greet := t.match_chat_intent("你好")
+	var m_q := t.match_chat_intent("为什么下这里？")
+	var m_resign := t.match_chat_intent("我认输了")
+	var m_other := t.match_chat_intent("今天天气不错")
+	checks.append(["⑦ 关键词 → 意图｜问候/提问/认输各归其类，无命中落 chat_other",
+			m_greet == "chat_greet" and m_q == "chat_question"
+					and m_resign == "chat_resign" and m_other == "chat_other",
+			"你好→%s｜为什么…→%s｜我认输了→%s｜天气→%s" % [m_greet, m_q, m_resign, m_other]])
+
+	# ---- ⑧ 「有问必答，但也可以不回应」两端都要在 ----
+	#   ★ 这是用户 2026-11-02 那句口令的**直接判据**。两端必须同时成立：
+	#     只测"问题必答" ⇒ 把回复率全设 1.0 也绿（AI 变成问答机器）；
+	#     只测"可以不说" ⇒ 把回复率全设 0 也绿（AI 变哑巴）。
+	#   ★ 关掉节流才统计得到：`reply_gap_ms` 是给人用的防复读，判据要量的是**概率**。
+	t.reply_gap_ms = 0
+	var ask_hit := 0
+	for i in range(200):
+		if t.reply_to("为什么下这里？") != "":
+			ask_hit += 1
+	var other_hit := 0
+	for i in range(200):
+		if t.reply_to("今天天气不错") != "":
+			other_hit += 1
+	checks.append(["⑧ 有问必答 + 可以不回应 · 两端都要断｜200 次提问命中 ≥160 · 200 次闲聊命中 ≤140 且明显更少",
+			ask_hit >= 160 and other_hit <= 140 and other_hit < ask_hit,
+			"提问答了 %d/200｜闲聊答了 %d/200（期望 ≥160 / ≤140）" % [ask_hit, other_hit]])
+
+	# ---- ⑨ 槽位 {delta} 必须真的被替换 ----
+	var d_slot := t.derive(_taunt_probe({"ai_diff": 20.0}), _taunt_probe({"ai_diff": 0.0}))
+	var brace_left := false
+	var saw_delta := false
+	for i in range(80):
+		var s := t.pick("brilliant_self", d_slot)
+		if s.contains("{"):
+			brace_left = true
+		if s.contains("20"):
+			saw_delta = true
+	checks.append(["⑨ {delta} 必须真的被替换｜80 次抽样不许残留「{」，且至少出现一次实际值 20",
+			not brace_left and saw_delta,
+			"残留占位符=%s｜见过 20=%s" % [str(brace_left), str(saw_delta)]])
+
+	# ---- ⑩ 主动台词走**真实入口** `_maybe_taunt()`，并真的进聊天记录 ----
+	#   ★ 判据必须走 `_maybe_taunt()` 而不是直接调 `Taunt`：直接调的话，
+	#     "忘了在 `place_stone()` 里接线"这种最常见的失效完全量不到（§127 量真实入口）。
+	#   ★ 必须成对：只测"关闸不写"会让"恒不写"（= 根本没接线）绿过去。
+	#   ★ 显式指定人机档：`_maybe_taunt()` 在联机 / 本地双人 / 复盘 / 终局四档都会早退。
+	var save_diff := an_ai_diff
+	game_mode = VS_AI
+	game_over = false
+	var chat_a := _chat_lines.size()
+	_taunt_ensure()
+	# 关闸负例
+	taunt_enabled = false
+	_taunt_reset()
+	an_ai_diff = 0.0
+	_maybe_taunt(AI_COLOR)              # 关闸：连基准都不建
+	an_ai_diff = 20.0
+	_maybe_taunt(AI_COLOR)
+	var quiet_a := _chat_lines.size()
+	# 开闸正例
+	taunt_enabled = true
+	_taunt_reset()
+	an_ai_diff = 0.0
+	_maybe_taunt(AI_COLOR)              # 建基准（不是妙手，沉默）
+	an_ai_diff = 20.0
+	_maybe_taunt(AI_COLOR)              # AI 妙手 → 该说话
+	var loud_a := _chat_lines.size()
+	var loud_text := _taunt_text
+	var loud_last := ""
+	if loud_a > 0:
+		loud_last = _chat_lines[loud_a - 1]
+	an_ai_diff = save_diff
+	checks.append(["⑩ 主动台词走真实入口并存档｜关闸一次不写，开闸出现妙手必须写进聊天记录",
+			quiet_a == chat_a and loud_a > quiet_a and loud_text != ""
+					and loud_last.contains(loud_text),
+			"关闸 %d→%d｜开闸 %d→%d｜末条「%s」" % [chat_a, quiet_a, quiet_a, loud_a, loud_last]])
+
+	# ---- ⑪ 回话走**真实入口** `_ai_reply()`（玩家说话 → AI 回）----
+	# ★ 2026-11-03：加打字停顿后 `_ai_reply()` 变成**异步**（要 await 计时器）⇒
+	#   这条判据改成先把 `taunt_typing_scale` 拧 0 再连跑，回到同步语义。
+	#   ⚠ 这**不是**在给判据开后门：它量的是"回不回"，不是"多久回" ——
+	#     停顿本身由 ⑫⑬ 单独钉（§150：仪器开关不许改动被测的规则语义）。
+	var keep_scale := taunt_typing_scale
+	taunt_typing_scale = 0.0
+	var chat_b := _chat_lines.size()
+	taunt_enabled = false
+	_ai_reply("你好")
+	var quiet_b := _chat_lines.size()
+	taunt_enabled = true
+	# 回复率不是 1 ⇒ 单次调用可能沉默，多掷几次直到回上来（20 次里 0.75 概率的失手率 1e-12）
+	for i in range(20):
+		_ai_reply("你好")
+	var loud_b := _chat_lines.size()
+	taunt_typing_scale = keep_scale
+	checks.append(["⑪ 玩家说话能逼出 AI 回话 · 走真实入口｜关闸一次不回 · 开闸 20 次必须有回应",
+			quiet_b == chat_b and loud_b > quiet_b,
+			"关闸 %d→%d｜开闸 %d→%d" % [chat_b, quiet_b, quiet_b, loud_b]])
+
+	# ---- ⑫ 打字停顿的**公式**（纯函数，不起计时器）----
+	#   ★ 用户口令「按回复的字数设置停顿时间，模拟真人打字的速度」的**直接判据**。
+	#   ★ 四个断言各挡一种写错法，缺一个就有一种"看着像人其实不是"能全绿：
+	#     ① 空串 = 0      ⇒ 挡住"连不说话都要等"
+	#     ② 短句 < 长句   ⇒ 挡住"固定延迟"（那正是这次要修的病，回退成常数就红了）
+	#     ③ 同字数带标点 > 不带 ⇒ 挡住"标点项根本没读"（漏了它长句变匀速流水线）
+	#     ④ 超长句 == 上限 ⇒ 挡住"上限没夹"（200 字台词会让人干等 22 秒）
+	var f_empty := t.typing_ms_for("")
+	var f_short := t.typing_ms_for("嗯")
+	var f_long := t.typing_ms_for("这一步我想了很久，你这条龙其实早就没气了。")
+	# 等长对照：两串都是 6 字，只差一个字符是"啊"还是"，"
+	var f_plain := t.typing_ms_for("我想了很久啊")
+	var f_punct := t.typing_ms_for("我想了很久，")
+	var f_huge := t.typing_ms_for("很长".repeat(200))
+	checks.append(["⑫ 打字停顿按字数算｜空串 0 · 短句<长句 · 同字数带标点更久 · 超长句夹在上限",
+			f_empty == 0 and f_short < f_long and f_punct > f_plain
+					and f_huge == t.typing_max_ms,
+			"空串=%d｜嗯=%d｜长句=%d｜同 6 字 无标点=%d 有标点=%d｜400 字=%d（上限 %d）" % [
+					f_empty, f_short, f_long, f_plain, f_punct, f_huge, t.typing_max_ms]])
+
+	# ---- ⑬ 停顿走**真实路径**：等待期内不出话，到点才出；连发两句只留最后一句 ----
+	#   ★ 为什么必须真跑一遍：⑫ 量的 `typing_ms_for()` 只是个纯函数，把它接错线
+	#     （比如忘了 `await`、或 `wait_ms` 算完没用在计时器上）⑫ 照样全绿。
+	#   ★ 把 per_char/punct 拧 0、pad 固定 150 ⇒ **不管抽到哪句**等待都是 150ms，
+	#     判据不必知道具体台词（不用去猜 `pick()` 抽中了什么）。
+	#   ★ 世代号那一半是**并发**才暴露的病：玩家连发两句时，第一句的等待还没结束
+	#     就被第二句取代 —— 没有 `_reply_seq` 会两句都冒出来，而且第二句看起来
+	#     像在回答第一句。这一半不可能靠 ⑫ 那种纯函数判据量到。
+	var tt := _taunt_ensure()
+	var keep_pad := tt.typing_pad_ms
+	var keep_pc := tt.typing_per_char_ms
+	var keep_pu := tt.typing_punct_ms
+	var keep_mx := tt.typing_max_ms
+	var keep_gap := tt.reply_gap_ms
+	tt.typing_pad_ms = 150
+	tt.typing_per_char_ms = 0
+	tt.typing_punct_ms = 0
+	tt.typing_max_ms = 10000
+	tt.reply_gap_ms = 0
+	taunt_typing_scale = 1.0
+	taunt_enabled = true
+	game_mode = VS_AI
+	game_over = false
+	var n_before := _chat_lines.size()
+	# 掷到一次"真的排上等待"为止（回复率不是 1，单次可能沉默）。
+	# ★ 判"排上了"看 `_ai_typing` 而不是看"记录涨没涨"：它正好在 `await` 之前置真，
+	#   而"记录没涨"在**回话被概率挡掉**时同样成立 ⇒ 用后者会把两种完全不同的情况
+	#   混成一个（§71 读数与判定必须同源）。
+	var sched := 0
+	for i in range(80):
+		_ai_reply("你好")
+		if _ai_typing:
+			sched = _reply_seq
+			break
+	var grew_now := _chat_lines.size() - n_before
+	# 连发第二句：第一句必须作废
+	var sched2 := 0
+	for i in range(80):
+		_ai_reply("你好")
+		if _ai_typing and _reply_seq > sched:
+			sched2 = _reply_seq
+			break
+	await get_tree().create_timer(0.45).timeout
+	var grew_final := _chat_lines.size() - n_before
+	tt.typing_pad_ms = keep_pad
+	tt.typing_per_char_ms = keep_pc
+	tt.typing_punct_ms = keep_pu
+	tt.typing_max_ms = keep_mx
+	tt.reply_gap_ms = keep_gap
+	taunt_typing_scale = keep_scale
+	# 干净基线：下一句不残留在"等待中"（否则 ⑬ 之后的清理会被一条迟到的回话污染）
+	_ai_typing = false
+	checks.append(["⑬ 停顿在真实路径上生效｜等待期内不出话 · 到点才出 · 连发两句只留最后一句",
+			sched > 0 and sched2 > sched and grew_now == 0 and grew_final == 1,
+			"排上等待 2 次（世代 %d→%d）｜立刻新增 %d 条（期望 0）｜0.45s 后新增 %d 条（期望 1）" % [
+					sched, sched2, grew_now, grew_final]])
+
+	# 收拾现场：自测不许把话留在聊天记录 / HUD 上（"跑过自测"和"正常对局"必须长得不一样）
+	_chat_lines.resize(chat_a)
+	_rebuild_chat_log()
+	_taunt_text = ""
+	_taunt_left = 0.0
+	_taunt_reset()
+	_update_hud()
+	_redraw_identity()
+
+	_taunt_report(checks)
+	get_tree().quit()

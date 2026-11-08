@@ -41,6 +41,12 @@ signal steam_session_request(remote_id: int)
 signal steam_session_failed(remote_id: int, session_error: int)
 signal steam_peer_packet(remote_id: int, data: Dictionary)
 signal steam_packet_read(remote_id: int, data: Dictionary)   # 原始字节解出的 Dictionary（Step 2 用）
+## 收到一个语音包（裸字节，**不可靠**通道，2026-11-01）。
+## ★ 与 `steam_peer_packet` 分开：那条是"业务消息，Dictionary，可靠"，
+##   这条是"音频，裸字节，丢了就丢了"。合成一条会让调用方在同一个回调里
+##   既做 `bytes_to_var` 又要判音频 —— 两种负载共用一条出口，迟早有人给音频包加上
+##   "解析失败就报错"的日志，然后每 40ms 刷一行。
+signal steam_voice_packet(remote_id: int, data: PackedByteArray)
 signal steam_lobby_list_received(lobby_ids: Array)           # 大厅列表回来了（异步，UI 挂这里）
 ## 好友接受邀请 / 用 Steam 好友列表的「加入游戏」进来了（2026-10-21）。
 ## ★ 这是「邀请好友」功能**唯一的入站出口**：好友点接受后，Steam 会
@@ -53,6 +59,10 @@ signal steam_join_requested(lobby_id: int, friend_id: int)
 
 const SINGLETON := "Steam"
 const P2P_CHANNEL := 0
+## 语音专用通道号（2026-11-01）。★ 与业务通道**必须分开**：同一通道上的可靠消息会被
+## 音频包挤住（队头阻塞）⇒ 说话时落子延迟跟着涨，而那种延迟**只在同时说话时**出现，
+## 极难归因到"通道共用"上。
+const P2P_VOICE_CHANNEL := 1
 
 # 可用性状态（字符串而非枚举：日志里直接可读，且自检好断言）
 const ST_MISSING := "插件缺失"       # 没有 Steam 单例（addon 没装 / 导出漏库）
@@ -64,6 +74,9 @@ const ST_IDLE := "未初始化"          # 还没试过（惰性）
 # P2PSend（老 API 口径，已核）
 const P2P_SEND_UNRELIABLE := 0
 const P2P_SEND_RELIABLE := 2
+## 不可靠 + 不延迟打包（2026-11-01 语音用）。★ 语音要的是它、不是 `P2P_SEND_UNRELIABLE`：
+## 后者允许底层**攒包**（Nagle 式），攒 100ms 再发 ⇒ 语音凭空多一截且不稳定的延迟。
+const P2P_SEND_UNRELIABLE_NO_DELAY := 1
 
 # 自检用：强制"假装插件缺失"（专门用来验证优雅降级这条路真的走得通）
 var _force_missing: bool = false
@@ -363,12 +376,7 @@ func avatar_pending(steam_id: int, size: int = AVATAR_MEDIUM) -> bool:
 	if _avatar_cache.has(key):
 		return false
 	return int(_avatar_miss.get(key, 0)) < AVATAR_RETRY_LIMIT
-
-
-## 清头像缓存（换对端 / 重进对局时用）。★ 不清的表现不是崩，是"新对手显示旧头像"。
-func clear_avatar_cache() -> void:
-	_avatar_cache.clear()
-	_avatar_miss.clear()
+# ⚰️ 2026-11-02 墓碑（名字不许回收）：`clear_avatar_cache()` 已删除（全工程零读者，`_audit_gd` ②）。
 
 
 func _avatar_handle(steam_id: int, size: int) -> int:
@@ -597,6 +605,47 @@ func poll_packets() -> int:
 
 func allow_relay(allow: bool) -> void:
 	_invoke("allowP2PPacketRelay", [allow])
+
+
+# ------------------------------------------------------------------ 语音（2026-11-01）
+# 语音聊天：裸字节 + **不可靠 + 不延迟** + 独立通道号（理由见文件头部与 `P2P_VOICE_CHANNEL`）。
+# ★ 单包大小约束：`VoiceChat.PACKET_BYTES` = 323 字节。不可靠包超过 MTU（约 1200）会被
+#   分片，而**任一分片丢了整包就废** ⇒ 分片越多可用率越低。323 安全。
+# ★ 这里**不做**分片重组、不做重传、不做序号：语音丢一包只是 40ms 的缺口，
+#   补齐它的代价（延迟）远大于损失。
+
+## 发一个语音包。返回是否真的交给了 Steam（`false` 表示被丢弃 —— 语音语义允许丢）。
+func send_voice(remote_id: int, data: PackedByteArray) -> bool:
+	if not is_available() or remote_id == 0 or data.is_empty():
+		return false
+	return _b("sendP2PPacket",
+			[int(remote_id), data, P2P_SEND_UNRELIABLE_NO_DELAY, P2P_VOICE_CHANNEL])
+
+
+## 把语音通道上攒着的包全读掉，逐条发 `steam_voice_packet`。返回读到的条数。
+## ★ 与 `poll_packets()` 分两个函数、各读各的通道号：合并的话就必须在同一处
+##   "按通道号分支"，而 `readP2PPacket(size, channel)` 的 channel 是参数 ⇒ 一处写错
+##   就会把音频当业务包解（`bytes_to_var` 对任意字节都"能解出点东西"，静默）。
+func poll_voice_packets() -> int:
+	if not is_available():
+		return 0
+	var n := 0
+	while true:
+		var sz := _i("getAvailableP2PPacketSize", [P2P_VOICE_CHANNEL])
+		if sz <= 0:
+			break
+		var r: Variant = _invoke("readP2PPacket", [sz, P2P_VOICE_CHANNEL])
+		if not (r is Dictionary) or (r as Dictionary).is_empty():
+			break
+		var d: Dictionary = r
+		var raw: Variant = d.get("data", PackedByteArray())
+		if raw is PackedByteArray:
+			emit_signal("steam_voice_packet", int(d.get("steam_id_remote", 0)), raw)
+		n += 1
+		# 防呆：40ms 一包 ⇒ 一秒最多 ~25 个；这个上限只为"理论上读不空也不能死循环"。
+		if n > 512:
+			break
+	return n
 
 
 # ------------------------------------------------------------------ 邀请好友（2026-10-21）
@@ -864,6 +913,12 @@ func run_selftest() -> Dictionary:
 	var live_to := _iconst("P2P_SESSION_ERROR_TIMEOUT", -1)
 	checks.append(["①c P2P_SESSION_ERROR_TIMEOUT=4｜文档口径核对，用于失败诊断",
 			live_to == 4, "实测=%d" % live_to])
+	# ★ ①d 语音的 send_type（2026-11-01）。用错**不报错**，只表现为语音延迟凭空涨一截
+	#   （用成 `P2P_SEND_UNRELIABLE` 会被底层攒包）。所以这条要和 ①a/①b 一样双向核对。
+	var live_und := _iconst("P2P_SEND_UNRELIABLE_NO_DELAY", -1)
+	checks.append(["①d P2P_SEND_UNRELIABLE_NO_DELAY｜语音用它，Steam 实测=1 且本文件常量与之一致",
+			live_und == 1 and P2P_SEND_UNRELIABLE_NO_DELAY == live_und,
+			"Steam=%d 本文件常量=%d" % [live_und, P2P_SEND_UNRELIABLE_NO_DELAY]])
 
 	# ---------- 组② 降级路径：**本步最关键的不变量** ----------
 	# 阳性对照：先证明"没强制缺失时"探测确实能认出插件在（否则下面的 ②b 是空转）
@@ -881,6 +936,10 @@ func run_selftest() -> Dictionary:
 	safe.append(["join_lobby(0)==false", join_lobby(0) == false])
 	safe.append(["send_message()==false", send_message(12345, {"m": "t"}) == false])
 	safe.append(["poll_packets()==0", poll_packets() == 0])
+	# 语音原语（2026-11-01）：插件缺失时必须同样安全 —— 语音是每秒 25 次的热路径，
+	# 这里漏一个守卫就是"每次说话都往 stdout 打一串反射 null"。
+	safe.append(["send_voice()==false", send_voice(12345, PackedByteArray([1, 2, 3])) == false])
+	safe.append(["poll_voice_packets()==0", poll_voice_packets() == 0])
 	safe.append(["lobby_member_count()==0", lobby_member_count(0) == 0])
 	safe.append(["lobby_members() 空", (lobby_members(0) as Array).is_empty()])
 	safe.append(["lobby_owner()==0", lobby_owner(0) == 0])
@@ -920,6 +979,8 @@ func run_selftest() -> Dictionary:
 	pre.append(["send_message()==false", send_message(1, {}) == false])
 	pre.append(["create_lobby()==false", create_lobby() == false])
 	pre.append(["poll_packets()==0", poll_packets() == 0])
+	pre.append(["send_voice()==false", send_voice(1, PackedByteArray([9])) == false])
+	pre.append(["poll_voice_packets()==0", poll_voice_packets() == 0])
 	pre.append(["is_available()==false", is_available() == false])
 	var bad2: Array = []
 	for e in pre:
@@ -1287,6 +1348,31 @@ func probe_p2p_self() -> Dictionary:
 
 	steam_session_request.disconnect(cb_req)
 	steam_peer_packet.disconnect(cb_pkt)
+
+	# ③b 语音通道自环（2026-11-01）：语音走**另一个通道号 + 另一种 send_type**，
+	#     而且它的坏法全是静默的 —— channel 参数传到别人头上、send_type 用成可靠、
+	#     或 `readP2PPacket(size, channel)` 的 channel 写错，三种都只表现为
+	#     "对面永远听不见"，一条日志都没有。⇒ 必须在自环里量一次"发得出、收得回"。
+	#   ★ 这条**不进判据**（同上：依赖 Steam 平台行为，写成判据就是一条可能永远红的假信号），
+	#     只出数 + 一句结论。
+	var got_voice: Array = []
+	var cb_voice := func(remote: int, data: PackedByteArray) -> void:
+		got_voice.append([remote, data.size()])
+	steam_voice_packet.connect(cb_voice)
+	var vpay := PackedByteArray()
+	vpay.resize(323)
+	for i in 323:
+		vpay[i] = i % 251
+	var vsent := send_voice(my, vpay)
+	var wv := 0
+	while wv < 180 and got_voice.is_empty():
+		poll_voice_packets()
+		await get_tree().process_frame
+		wv += 1
+	steam_voice_packet.disconnect(cb_voice)
+	lines.append("语音自环｜send_voice(323B, 通道 %d, 不可靠不延迟) → %s｜泵 %d 帧收到 %d 包%s" % [
+			P2P_VOICE_CHANNEL, str(vsent), wv, got_voice.size(),
+			"" if got_voice.is_empty() else "（首包 %d 字节）" % int(got_voice[0][1])])
 
 	# ④ 同一进程再 join 自己建的 lobby —— Steam 同账号能不能在同一个房里算两个成员
 	var joined := {"fired": false, "resp": -1}

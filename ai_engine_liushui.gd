@@ -1050,71 +1050,7 @@ func _is_own_eye(v: int, color: int) -> bool:
 			return false
 		k += 1
 	return true
-
-
-# ===========================================================================
-# 面积计分（终局口径，供将来接入/对照用）
-# ===========================================================================
-func area_score() -> float:
-	_seen.fill(0)
-	var sc := 0.0
-	_gid += 1
-	var sid := _gid
-	for i in n:
-		if _b[i] == BLACK:
-			sc += 1.0
-		elif _b[i] == WHITE:
-			sc -= 1.0
-	# 空区归属：只被一方接触的地归该方
-	_seen_id += 1
-	var sid2 := _seen_id
-	for i in n:
-		if _b[i] != EMPTY or _seen[i] == sid2:
-			continue
-		_gbuf[0] = i
-		_gst[i] = sid
-		_seen[i] = sid2
-		var cnt := 1
-		var qi := 0
-		var touch_b := false
-		var touch_w := false
-		while qi < cnt:
-			var cur := _gbuf[qi]
-			qi += 1
-			var k := _as[cur]
-			var ke := _as[cur + 1]
-			while k < ke:
-				var nb := _af[k]
-				k += 1
-				if _b[nb] == BLACK:
-					touch_b = true
-				elif _b[nb] == WHITE:
-					touch_w = true
-				elif _seen[nb] != sid2:
-					_seen[nb] = sid2
-					_gbuf[cnt] = nb
-					cnt += 1
-		if touch_b and not touch_w:
-			sc += float(cnt)
-		elif touch_w and not touch_b:
-			sc -= float(cnt)
-	return sc - komi
-
-
-## 诊断：返回当前局面的渗流势场摘要（自测用）。
-func probe_field(color: int, iters: int = -1) -> Dictionary:
-	var k := iters_far if iters < 0 else iters
-	var f := _field(color, k)
-	var undet := 0
-	var mine := 0
-	var theirs := 0
-	for i in n:
-		if _b[i] != EMPTY:
-			continue
-		if absf(f[i] - 0.5) < frontier_band:
-			undet += 1
-		elif f[i] > 0.5:
-			mine += 1
-		else:
-			theirs += 1
-	return {"field": f, "undetermined": undet, "mine": mine, "theirs": theirs}
+# ⚰️ 2026-11-02 墓碑（名字不许回收）：`area_score()` 已删除（全工程零读者，`_audit_gd` ②）。
+#   它是"终局口径面积分，供将来接入/对照用"—— 但终局真值一直由 `rules_kernel.gd` 那边算，
+#   这个"将来"从 2026-10 挂到现在没有任何读者。真要接，应该调内核而不是在这里另算一份。
+# ⚰️ 2026-11-02 墓碑（名字不许回收）：`probe_field()` 已删除（全工程零读者，`_audit_gd` ②）。

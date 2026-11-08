@@ -60,6 +60,12 @@ const WHITE := 2
 ##   （`_sealed_by_opp_hard` 等安全阀照旧先跑）。所以最坏情况是"先验更差"，不会下出非法手。
 var ext_prior := PackedFloat32Array()
 @export_range(0.0, 1.0, 0.01) var w_external_prior: float = 0.0
+## 外部先验混合发生在 Top-K 剪枝**之前**（false，历史行为）还是**之后**（true）。
+## true ⇒ 候选集完全由磐石决定，网络只重排这 K 个的内部顺序。
+## ★ 为什么要有这个开关：2026-11-06 实测「剪枝前混合」在**任何** `w>0` 下都把野马
+##   拖到 2:14 / 1:12 / 0:12（`w=0` 对照 7:9 未定）⇒ 需要把"选哪些候选"和"怎么排"
+##   两件事分开量。默认 false ⇒ 历史行为逐位不变。
+var ext_prior_after_prune: bool = false
 ## 上一次 `_prepare_root()` 实际参与混合的候选数（0 = 没注入）。探针读它判"钩子到底跑没跑"。
 var ext_prior_last_mix: int = 0
 ## 上一次混合**有没有真的换掉根层首选**（1 = 换人了，0 = 没换）。
@@ -94,6 +100,11 @@ var ext_prior_last_w: float = -1.0
 ##   （§106 有效分母=0 / §138 无输出型判据）。判据侧必须能把这个分母打出来。
 ##   2026-10-24 实测：`--yematest` 的 3 个固定局面恰好全一致（网络是磐石的学生）。
 var ext_prior_last_top1_agree: int = -1
+## 磐石分数的**形状归一**是否被迫退回名次映射（1 = 退回了，0 = 正常，-1 = 本次没混合）。
+## ★ 为什么必须留一位：退回后行为等于旧实现（丢弃量级信息），而那是本轮实测里
+##   「w=0.1 也全败」的元凶 ⇒ 退回必须是**可观测**的，不能静默（§113 的同族）。
+## 触发条件：跨度退化（< 1e-6）或跨度爆炸（≥ 5e8，说明候选里混进了非法点哨兵）。
+var ext_prior_mix_span_fallback: int = -1
 ## rollout 最长手数上限（0 = 自动 min(n, 220)）。
 ## 大盘下完满一盘要数百手，截断后单次模拟明显变快（未定型的空区不计分）
 @export var max_playout_moves: int = 0
@@ -297,6 +308,39 @@ var ext_prior_last_top1_agree: int = -1
 ## 落在大盘 λ* 的左侧、小盘 λ* 的附近，两盘都稳。
 @export var eval_mix_lambda: float = 0.5
 
+## ★★ 叶子静态评估换成**价值网络**（2026-11-07）。默认 `false` = 逐位复现旧行为，
+##   与 `count_prisoners` / `infl_src_min_libs` 同族约定：**关态必须一字节不差**。
+##
+## 【为什么动这一刀】10-27 训好的 `ai/value_weights.json` 一直躺在工程里没接进引擎。
+##   离线证据（`nn/out_value_20261027_1329_cap_h8/report.txt`）指向它比 `area1` 强得多：
+##     · 配对 SNR **1.52 vs 0.35**（同一局相邻手之间分差的可分辨性）；
+##     · 静态评估的**肥尾**（每 10 手有 1 手让评估跳 >10 目）**9.9% → 1.8%**；
+##     · 留出 106 局 / 12719 局面 ΔMAE **−5.541 目**（局级配对 p=0.0001）。
+##   而 `eval_mix_lambda` 的注释里，AlphaGo 那套 `v = (1-λ)·rollout + λ·value_net` 的
+##   `value_net` 位置一直塞的是 `_area_score()` —— 这一刀就是把它换成真的网络。
+##
+## 【成本 — 必须先读，它决定了哪种接法划算】`--valuetest` ④ 实测
+##   **897 µs/次**（n=120，h=8 L=1，纯 GDScript），而 `_area_score()` 约 **87 µs**。
+##   ⇒ **只有「零 rollout（`playout_cap_factor <= 0`）+ 纯价值网络（`eval_mix_lambda = 1`）」
+##     这一种接法划算**（约 1 ms/模拟，与现行 rollout 的 1.1~1.8 ms/模拟同量级）。
+##     打「0.7×rollout + 0.3×net」会让每模拟贵 ~1 ms、模拟数掉到 1/6，
+##     于是「换了评估器」和「砍了算力」两个变量一起动（§47）⇒ 测出来必是"AI 变弱"的假象。
+##
+## 【★ 两个静默陷阱】
+##   ① `eval_mix_lambda <= 0` 时 `_result_impl()` **根本不读**静态分（那一支被 λ 乘成 0）
+##      ⇒ 网络开着也等于没开，而报告照样印胜负。装载时会打一行警告，别忽略。
+##   ② 输出单位是「白 − 黑」的**目**，且标签 `tw` **已含提子** ⇒ 本路径**不再加**
+##      `_pris_term()`（加了就是重复计一次，只在 `count_prisoners=true` 时才显形）。
+##
+## 【跨盘】权重是 n=120 的彭罗斯盘上训出来的。点级特征 + mean 池化让它**结构上**能迁移，
+##   但线性头学的是"120 格盘的目差" ⇒ 换到 170/360 格输出尺度不保证（不是"应该没事"，
+##   是 `[未测]`）。第一次跨盘用之前必须先量尺度，别直接上 A/B。
+@export var value_net_enabled: bool = false
+## 权重路径。`ai/*.json` 已在 `export_presets.cfg` 的 include_filter 里 ⇒ 自动进包。
+## ⚠️ `--aispec`/`--aiduel` 的 `pa=/pb=` 只能写 bool/int/float（解析器不产 String），
+##   所以这个键**不能从命令行改**；要换权重就换文件（或改这个默认值）。
+@export var value_net_path: String = "res://ai/value_weights.json"
+
 ## ★ 根先验 17 项的**顺序真源**（第二档训练落盘口径）。
 ##   `game.gd` 的 `AIDATA_W` 直接引用本常量 —— 两边各写一份必然漂移
 ##   （特征错位一位时全盘静默：训练器照样收敛，只是学到错的权重）。
@@ -429,6 +473,63 @@ var _rt := PackedFloat32Array()
 ## 证据收缩强度：score = 先验 + w×(真实胜率-先验)×V/(V+evidence_k)。
 ## 调大 → 需要更多访问数才肯偏离先验（更稳、更省时间）；调小 → 更信搜索
 @export var evidence_k: float = 10.0
+
+@export_group("根节点对抗复核（2026-10-29，默认关）")
+## 对 MCTS 最终选点额外补一次「对手最强应手」浅层复核：若这一手的**最坏结果**
+## 明显劣于次优候选，就改用次优。
+##
+## 【为什么是这个方向】MCTS 的 Q 是「对手各种应手下的**平均**」——一手只因某一条
+## 应手就崩，平均后只掉一点，看不出来。根节点复核取的是 **min over 应手**，正是
+## 平均值抹掉的那一维。而「加宽搜索」（`root_width` / `playout_cap_factor`）已实测无收益：
+## 复核只花在**最终那一手**（O(候选×应手) 次静态评估），不摊薄任何一次模拟。
+##
+## ⚠️ 默认关 ⇒ 逐位复现旧行为。开它只影响选点，不改任何叶子评估式。
+##
+## ★★ 2026-10-29 结论：**这一轴已做，未见收益，别再重跑**（pw100 单线程、16 局换色 ×2 批）：
+##   · 纯「最坏效用取最大」：A 侧 **2/16**（B 87.5%，z=+3.00）⇒ 明显有害；
+##   · 加 `root_check_veto_floor` 只当否决：A 侧 **5/16**（B 68.8%，z=+1.50，§151 属未定但**无正向**）。
+##   机制：每候选只有 2 条应手各 1 次 rollout（效用 σ≈0.3），而它想分辨的差距均值只有
+##   **0.0005**（`rc_gap_*`，n≈1300 手）⇒ 复核在统计上就是"掷四次骰子决定要不要否决百次模拟"。
+##   要复活它，必须先把单次 rollout 的方差压下来（每格多条 rollout 平均 / CRN 共用流），
+##   否则加宽应手数、放低阈值**只会更糟**（同 §151 的教训）。
+@export var root_check_enable: bool = false
+## 参与复核的候选数（含 MCTS 选中的那一手），按 `_pick_scores()` 的名次取前 N。
+## 2 = 只比「选中手 vs 次优」；≥3 才可能改选到第三名。
+@export var root_check_cands: int = 2
+## 每个候选取几条「对手最强应手」（对手根层候选的前 N）。1 = 只看对手第一应手。
+## 这才是复核花钱的地方：成本 ≈ 候选数 ×（1 次备根 + 应手数 × 1 次静态评估）。
+@export var root_check_replies: int = 2
+## 否决阈值（单位 = **效用**，[0,1]，rollout 口径）。
+## 次优候选的最坏效用必须比选中手的最坏效用高出这么多才改选 —— 抗噪闸门，别设 0。
+## 定标用 `--aispec` 印的 `gap 最大`：阈值超过最大 gap ⇒ 永远不改选（旋钮变死的，§33）。
+@export var root_check_margin: float = 0.08
+## 【灾难闸门】只有选中手的最坏效用低于这个地板时才允许否决（1.0 = 恒不否决）。
+##
+## ★★ 为什么必须有它（2026-10-29，16 局实测）：不看地板、纯按「最坏效用取最大」改选，
+##   等于用 **4 次 rollout**（每候选 2 条应手各 1 次）盖掉 **100 次 playout** 的 MCTS 结论
+##   ⇒ A 侧 **2/16 胜（B 87.5%，z=+3.00）**，而且是大差崩盘（31:169 / 16:184）。
+##   机制直白：单次 rollout 的效用方差 ≈0.3，比它想否决的那点差距大一个量级
+##   （实测 gap 均值 −0.011）⇒ 31% 的手被噪声翻掉。复核只能当**否决**用，不能当**选点**用。
+@export var root_check_veto_floor: float = 0.25
+## 诊断（只读）：上一手复核了几个候选 / 是否改选 / 改选带来的最坏效用增益 / 累计改选次数
+var rc_cands_last := 0
+var rc_switched_last := 0
+var rc_gain_last := 0.0
+var rc_switched_total := 0
+## 实际执行过复核的手数（闸门关 / 候选 <2 时不计）—— `--aispec` 的存在性判据用
+## （§96：`exit=0` ≠ "跑到了"；开侧必须 >0、关侧必须 =0）
+var rc_checks_total := 0
+## 复核的**灵敏度仪器**（§33 旋钮拧不动先看它是不是死参数）：
+##   `rc_gap_max` = 全部复核里「次优最坏 − 选中手最坏」的最大值。
+##   若它远小于 `root_check_margin` ⇒ 阈值永远不被跨过（改选恒 0），
+##   这时"复核无用"与"阈值太高"是两件事，必须靠这个数分开。
+var rc_gap_sum := 0.0
+var rc_gap_max := -INF
+var rc_gap_n := 0
+## 调试开关（默认关；`--aispec` 可用 `a=rc_debug=true` 打开）：逐手打印复核的中间量。
+## 存在的理由：`改选 0 手` 有三种完全不同的成因（闸门没进 / 候选非法 / 阈值太高），
+## 不打中间量就只能靠猜。
+var rc_debug := false
 
 @export_group("全局局势分析（analyze_board）")
 ## 是否启用「死子目不计负分」的真负分。这是本层对 AI 行为影响最大的一项：
@@ -596,6 +697,15 @@ var _dead_hit := 0
 var _influence_need := 0
 var _scanall_calls := 0
 var _playout_calls := 0
+
+## 价值网络实例（`value_net_enabled` 打开后懒装载，见 `_ensure_value_net()`）。
+## ★ 关态时 `_vn` 恒 null、`_vn_tried` 恒 false ⇒ 一条分支都不会多走，逐位复现旧行为。
+var _vn: NnValue = null
+var _vn_ok := false
+var _vn_tried := false
+## 只用于读数（`--aivaltest` / 对打报告），不参与任何分支。
+var _vn_calls := 0
+var _vn_us := 0
 
 # 本轮迭代的走子日志（供 RAVE/AMAF 回传）
 var _log := PackedInt32Array()
@@ -2106,16 +2216,18 @@ func _playout(last: int) -> float:
 	# 静态评估：在**当前叶子节点**直接打分（确定性、零方差）。
 	# 与 rollout 结果按 eval_mix_lambda 加权混合，稀释单次 rollout 的噪声（见该参数注释）。
 	# λ=0 时完全跳过，不产生任何额外开销。
+	# ★ 落点统一走 `_leaf_static_score()`（唯一出口）：关态 = `_area_score() + _pris_term()`
+	#   逐字不变；开态 = 价值网络（见 `value_net_enabled` 的声明处）。
 	var static_sc := 0.0
 	if eval_mix_lambda > 0.0:
-		static_sc = _area_score() + _pris_term()
+		static_sc = _leaf_static_score()
 	# ---- 零 rollout 模式（`playout_cap_factor <= 0`，见该参数的声明处）----
 	# 叶子不做随机对局：效用 = 静态评估。**不推进任何手**，所以无需 `_undo()`；
 	# 但 `_turn`/`_ko` 仍按原样恢复（本函数契约：调用前后局面与行棋方不变）。
 	if playout_cap_factor <= 0.0:
 		if eval_mix_lambda <= 0.0:
 			# λ=0 时上面没算静态分，而它是唯一的分量 ⇒ 必须补算。
-			static_sc = _area_score() + _pris_term()
+			static_sc = _leaf_static_score()
 		# `_result()` 内部仍会再算一次 `_area_score()`（两分量同值时算式恒等于它本身）。
 		# 那 87µs 是白跑的，但改 `_result_impl` 会动到 `_last_area_*` 的写入时机，
 		# 风险大于收益 ⇒ 先留着，见本条注释。174µs/模拟仍比 rollout 的 ~4300µs 低 25 倍。
@@ -2341,6 +2453,67 @@ func _pris_term() -> float:
 	if not count_prisoners:
 		return 0.0
 	return float(_pris_w - _pris_b)
+
+
+## 价值网络懒装载。只在 `value_net_enabled` 为真且第一次要算叶子分时发生。
+##
+## ★ 为什么懒、不写在 `setup()` 里：`setup()` 是仪器里被反复调用的（每条自检一次），
+##   在里面解析 8.8KB JSON + 重建 3×n×h 的 LUT 会拖慢**每一条与它无关的判据**；
+##   而懒装载让关态的成本**严格为零**（`_vn_tried` 一开始就是 false，第一次进这里才动）。
+##
+## ★ 装载失败**不静默**：打一行 `✗`。但仍回退 `_area_score()` —— 因为引擎没有
+##   `get_tree().quit()` 可用（它是 RefCounted）。判别真伪的责任放在判据侧：
+##   `--aivaltest` 与对打报告都会把「生效值」单独印一行（§159 配平闸的思路）。
+func _ensure_value_net() -> void:
+	if _vn_tried:
+		return
+	_vn_tried = true
+	if _vn != null:
+		return
+	var vn := NnValue.new()
+	vn.setup(adj)
+	if not vn.load_weights(value_net_path):
+		print("[valuenet] ✗ 装载失败（%s）：%s ⇒ 回退 area1，这一路 A/B 会变成 A 打 A"
+			% [vn.err, value_net_path])
+		return
+	# ★ 权重里没记训练盘的格数（`meta` 只有 MAE/符号率/参数量）⇒ 只能按已知事实提示：
+	#   它是 n=120 的彭罗斯盘上训的（`nn/data/sp/sp_120_*.txt`）。跨盘不是"应该没事"，
+	#   是 `[未测]`：mean 池化让**结构**可迁移，但线性头学的是"120 格盘的目差"。
+	if n != 120:
+		print("[valuenet] ⚠ 当前盘 n=%d，权重是在 n=120 的彭罗斯盘上训的 ⇒ 输出尺度不保证（跨盘未标定）" % n)
+	if eval_mix_lambda <= 0.0:
+		# 这条最阴：`_playout()` 会老老实实算出网络分，然后 `_result_impl()` 把它乘成 0。
+		print("[valuenet] ✗ eval_mix_lambda=%.2f ≤ 0 ⇒ 静态分量在 `_result_impl()` 里被 λ 乘成 0，"
+			% eval_mix_lambda + "网络等于没开 ⇒ 要它生效请设 eval_mix_lambda=1.0")
+	_vn = vn
+	_vn_ok = true
+
+
+## 叶子静态评估 —— **唯一出口**（`_playout()` 只许走这里，不许直接调 `_area_score()`）。
+##
+## 关态：`_area_score() + _pris_term()`，与 2026-10-27 之前的原文逐字等价（含写入时机）。
+## 开态：价值网络 + 贴目。**不加提子项** —— 网络标签 `tw` 本身就含提子（见参数声明处）。
+##
+## ⚠️ 开态下 `_area_score()` 仍然会被 `_result_impl()` 再调一次（约 87µs，占 ~9%）：
+##   它同时负责写 `_last_area_black/_last_area_white`（分析层的读数），而改那个写入时机
+##   会波及 `--anlz*`/`--areatest` 一批既有判据 ⇒ 宁可白跑这 87µs（与 `_playout()` 里
+##   零 rollout 分支的那条注释同一条理由）。
+func _leaf_static_score() -> float:
+	if not value_net_enabled:
+		return _area_score() + _pris_term()
+	_ensure_value_net()
+	if not _vn_ok:
+		return _area_score() + _pris_term()
+	var t0 := Time.get_ticks_usec()
+	var v: float = _vn.value_of_packed(_b, _ply, _turn)
+	_vn_us += Time.get_ticks_usec() - t0
+	_vn_calls += 1
+	if is_nan(v):
+		# 只可能是盘面长度不符（`_b` 与 `n` 脱钩，正常不会发生）。报红而不是当 0.0。
+		print("[valuenet] ✗ 前向失败：%s ⇒ 本叶子回退 area1" % _vn.err)
+		return _area_score() + _pris_term()
+	# 贴目口径与 `_area_score()` 尾部那一处**同源**：都返回「白 − 黑」，白方贴目 ⇒ `+ komi`。
+	return v + komi
 
 
 func _result_impl(static_sc_given: float) -> float:
@@ -3318,6 +3491,15 @@ func _root_terms(v: int, last: int) -> float:
 ## ★ 2026-10-08：缓存的**唯一**失效来源是 `_sc_id`；推进它的地方有三个 ——
 ##   `_prepare_root()`、`probe_own_area()`、以及 `_load_board()`（换盘必须作废，见那里的注释）。
 ##   修前 `_load_board()` 不推 ⇒ 探针换盘后会拿到**上一局**的分析（`--scidtest` 判据 A）。
+## ⚠️⚠️ **副作用（2026-10-29 实测，重大）**：首次调用会走
+##   `analyze_board(export_board(), _ko)` → `_load_board()` ⇒ 该函数把
+##   **`_ply` / `_capsp` / `_pris_b` / `_pris_w` 全部清零**（`_b` 按 `export_board()`
+##   重灌，盘面内容保住，但**手数栈与提子账目全丢**）。
+##   生产路径**看不出来**：`_prepare_root()` 只在 `_ply == 0` 时被调用，清零正好是空操作。
+##   但凡有调用方在**盘上已有落子**时碰 `_sealed_by_opp_hard()` / `_root_score()` /
+##   `_analyze_bonus()`（三者都会经这里），随后再 `_undo()` 就会减到 `_ply == -1`
+##   ⇒ 读数静默变垃圾（不报错、不崩）。踩到它的：`_root_check()`（见 `_rc_state_save()`）。
+##   修法不是改这里（那会动 `_last_area_*` 与缓存口径），而是**调用方整体快照/还原**。
 func _anlz() -> Dictionary:
 	if _an_cache_id == _sc_id:
 		return _an_cache
@@ -3643,13 +3825,17 @@ func _prepare_root(opp_last: int) -> Dictionary:
 			sealed_hard_fallback_last = 0
 	sealed_hard_blocked_last = blocked.size()
 
-	# ---- 外部先验注入（野马）：按名次混合，量纲无关 ----
-	# ★ 必须放在下面 Top-K 剪枝**之前**：剪枝本身就是按 `scores` 排序取前 K 个，
-	#   所以要让网络影响"**哪些**候选能进搜索"，只能在这之前改 `scores`。
-	#   放到剪枝后面就只影响内部顺序 —— 看起来接上了，实际网络对候选集毫无影响（不报错）。
-	if ext_prior.size() == n and w_external_prior > 0.0 and cands.size() >= 2:
-		_mix_external_prior(cands, scores)
-	else:
+	# ---- 外部先验注入（野马）----
+	# ★ 默认放在下面 Top-K 剪枝**之前**：剪枝按 `scores` 排序取前 K 个，所以要影响
+	#   "**哪些**候选能进搜索"，只能在这之前改 `scores`。
+	# ★★ 2026-11-06 新增 `ext_prior_after_prune`（默认 false，行为与历史逐位相同）：
+	#   剪枝**之后**再混合 ⇒ 候选集完全由磐石决定，网络只改内部顺序。
+	#   为什么要这个开关：实测「任何 w>0 的先验都把野马拖成 2:14 / 1:12 / 0:12，
+	#   而 w=0 对照是 7:9（未定、仪器无偏）」—— 在剪枝前混合太多，任何网络都会
+	#   把磐石本来要搜的点挤出前 K。这个开关就是用来把"选候选"和"排顺序"两件事分开量。
+	#   ⚠ 两种模式**只能二选一**：剪枝前混过了、剪枝后再混一次是双重混合（参数会失真）。
+	var do_mix: bool = ext_prior.size() == n and w_external_prior > 0.0 and cands.size() >= 2
+	if not do_mix or ext_prior_after_prune:
 		# ★ 探针必须**每手清零**：只在混合分支里写、不清零的话，上一手留下的 `last_mix`
 		#   会让"这一手根本没注入"读起来像"注入了 m 个候选"（探针撒谎，且是静默的）。
 		#   同族事故：§105「探测→静音」与 §134「探针≠派生函数」。
@@ -3660,6 +3846,9 @@ func _prepare_root(opp_last: int) -> Dictionary:
 		ext_prior_last_order_diff = 0
 		ext_prior_last_w = -1.0
 		ext_prior_last_top1_agree = -1
+		ext_prior_mix_span_fallback = -1
+	if do_mix and not ext_prior_after_prune:
+		_mix_external_prior(cands, scores)
 
 	# 先验剪枝：分支因子远大于模拟预算时，全宽展开只会让每个子节点分到 1~2 次访问，
 	# 统计差异完全被方差掩盖。只保留评分最高的 K 个候选，搜索才真正起作用
@@ -3678,6 +3867,10 @@ func _prepare_root(opp_last: int) -> Dictionary:
 		cands = kcands
 		scores = kscores
 
+	# ★ `ext_prior_after_prune`：候选集已定，现在只让网络重排这 K 个的内部顺序。
+	if do_mix and ext_prior_after_prune:
+		_mix_external_prior(cands, scores)
+
 	# 剪枝后先验重新归一化：直接在全集上算出的 softmax 会因被删去的候选而失真
 	var priors := _softmax_priors(scores)
 	return {"cands": cands, "priors": priors}
@@ -3692,15 +3885,30 @@ func prepare_root_for_dump(board_dict: Dictionary, ko: int = -1) -> Dictionary:
 	return _prepare_root(_infer_opp_move())
 
 
-## 把外部先验（神经网络分数）与 `_root_score` 按**名次**混合，**原地改写** `scores`。
+## 把外部先验（神经网络分数）与 `_root_score` 混合，**原地改写** `scores`。
 ##
-## 为什么用名次而不是分数加权：两者量纲差约 4 个数量级（`_root_score` 是几万量级，
+## 为什么不能直接把两者的分数相加：量纲差约 4 个数量级（`_root_score` 是几万量级，
 ## 网络 logit 只有 −4.5~−1.6）。直接相加时网络的贡献会被完全吞掉 —— 而且**不报错**，
-## 只表现成"接了个网络但强度一点没变"。名次法对量纲、温度、饱和全都免疫。
+## 只表现成"接了个网络但强度一点没变" ⇒ 两边都先映射到 [0,1] 再混。
+##
+## ★★ 2026-11-06 修（这一版之前是"两边都按名次混"，见下面的实测）：
+##   旧实现把**磐石的原始分整个丢掉**、只留名次（`1 - r/(m-1)`），于是只要 `w > 0`，
+##   根层 `scores` 的形状就从"磐石的真实偏好差"变成"按名次线性下降"。
+##   `_softmax_priors()` 会先按跨度归一，所以**量纲无害**，但**形状**变了：
+##   线性名次再过 softmax ⇒ 12 个候选上的先验被**压平**，100 次模拟被摊开，
+##   磐石"这个点明显更差"的判断力直接消失。
+##   实测（`--yemaduel=r8:pw100`，170 格，pw=100，换色）：
+##     · `w=0`（= 纯磐石，阴性对照）七胜六负 ⇒ **仪器无偏**；
+##     · `w=0.10` **0:6**、`w=0.30` 1:12、`w=0.50` 0:12 —— 全败。
+##     `w=0.10` 时名次几乎等于磐石（九成权重在磐石名次上），**排序几乎没变**却照样全败
+##     ⇒ 输的不是"网络排得差"，而是"磐石分的量级被丢了"。
+##   修法：磐石侧**保留原始分的形状**（保序地线性归一到 [0,1]），网络侧仍用名次
+##   （量纲无关）。`w=1` 时结果与旧实现**逐位相同**（纯网络名次），只有中间档变了。
+##   ⚠ `w=1` 的语义仍是"完全采用外部排序"：那时磐石的信息确实一点不留 ——
+##     要磐石的信息就必须给 `w < 1`（这也是本轮实测的结论：`w=1` 只在
+##     "网络就是磐石的复读机"时才好，换个更强的老师反而更差）。
 ##
 ## `w_external_prior = 1` ⇒ 完全采用外部排序；`0` ⇒ 调用方不会进来（有守卫）。
-## 混合后 `scores` 的数值域变成 [0,1]，与 `_root_score` 无关 —— 这是**故意**的：
-## 下游只有 `_softmax_priors()` 读它，而 softmax 只关心相对大小。
 func _mix_external_prior(cands: Array[int], scores: Array[float]) -> void:
 	var m := cands.size()
 	var idx_r: Array[int] = []
@@ -3714,12 +3922,26 @@ func _mix_external_prior(cands: Array[int], scores: Array[float]) -> void:
 		return ext_prior[cands[a]] > ext_prior[cands[b]])
 	var inv := 1.0 / float(maxi(m - 1, 1))
 	var w := clampf(w_external_prior, 0.0, 1.0)
+	# ---- 磐石侧：保序归一到 [0,1]，**保留分数形状** ----
+	# 哨兵（`_root_score` 对非法点会给 −1e9 量级）会让跨度爆炸 ⇒ 检出后退回名次映射，
+	# 并把这件事记在 `ext_prior_mix_span_fallback` 里（静默退回是上一版的老毛病）。
+	var s_mn := 1.0e30
+	var s_mx := -1.0e30
+	ext_prior_mix_span_fallback = 0
+	for i in m:
+		var sv: float = scores[i]
+		s_mn = minf(s_mn, sv)
+		s_mx = maxf(s_mx, sv)
+	var s_span: float = s_mx - s_mn
+	var span_ok: bool = s_span > 1.0e-6 and s_span < 5.0e8
+	if not span_ok:
+		ext_prior_mix_span_fallback = 1
 	var blended := PackedFloat32Array()
 	blended.resize(m)
-	# 先摆磐石的名次分
 	for r in m:
-		blended[idx_r[r]] = 1.0 - r * inv
-	# 再按 w 混入网络名次分（注意 `blended[i]` 此刻装的是磐石名次分）
+		var i_r: int = idx_r[r]
+		blended[i_r] = ((scores[i_r] - s_mn) / s_span) if span_ok else (1.0 - r * inv)
+	# 再按 w 混入网络**名次**分（注意 `blended[i]` 此刻装的是磐石分的形状）
 	for r in m:
 		var i: int = idx_e[r]
 		blended[i] = (1.0 - w) * blended[i] + w * (1.0 - r * inv)
@@ -3866,6 +4088,11 @@ func _copy_params_from(src: AIEngine) -> void:
 	# ★★ 提子项（2026-10-27）：**必须同步**，理由与 `komi` 完全相同 ——
 	#   否则多线程 worker 各自按「不含提子」的口径评估，合并选点等于混两种策略。
 	count_prisoners = src.count_prisoners
+	# ★★ 价值网络（2026-11-07）：**必须同步**，理由与 `komi` 完全相同 ——
+	#   否则主引擎走网络、worker 走 area1，合并选点等于混两种评估器。
+	#   `_vn` 实例**不**同步：每个 worker 自己懒装载一份（它是只读的，不共享也不影响复现性）。
+	value_net_enabled = src.value_net_enabled
+	value_net_path = src.value_net_path
 	# 同理必须同步：不同步 ⇒ 每个 worker 按另一套归属口径评估，合并选点 = 混两种策略
 	infl_dead_zone = src.infl_dead_zone
 	infl_src_min_libs = src.infl_src_min_libs
@@ -3914,6 +4141,13 @@ func _copy_params_from(src: AIEngine) -> void:
 	prior_temp = src.prior_temp
 	prior_pick_weight = src.prior_pick_weight
 	evidence_k = src.evidence_k
+	# 根节点对抗复核：worker 走 `_search_budget()`、不调 `choose_move()` ⇒ 现在读不到；
+	# 但同步是零代价的，将来谁让 worker 调 `choose_move` 也不会变成「主实例复核了、worker 没复核」。
+	root_check_enable = src.root_check_enable
+	root_check_cands = src.root_check_cands
+	root_check_replies = src.root_check_replies
+	root_check_margin = src.root_check_margin
+	root_check_veto_floor = src.root_check_veto_floor
 	p_capture = src.p_capture
 	p_eye = src.p_eye
 	p_save = src.p_save
@@ -4110,12 +4344,18 @@ func _root_real_stats(cands: Array[int], priors: Array[float], agg: Dictionary,
 ## 其中 V = 真实访问数（已扣掉各引擎初始注入的先验虚拟访问）。
 ## V 很小 → 系数≈0，直接按先验走；V 攒够 → 证据才逐步说话。无门槛跳变，不会出现
 ## 「刚好够 V 的手突然翻盘」这种不连续。
-func _pick_merged(cands: Array[int], priors: Array[float], agg: Dictionary, envs: int) -> int:
+## 选点分数的**唯一真源**：返回每个候选的 score（越大越好）。
+##
+## ★ 必须单独成函数（2026-10-29）：根节点对抗复核（`_root_check()`）要按「名次」取次优
+##   候选，如果它自己再写一遍打分式，就会出现「复核眼里的次优」与「选点眼里的次优」
+##   是两个东西 —— 而且不报错，只表现为复核偶尔改选到更差的一手（§70 / §136）。
+func _pick_scores(cands: Array[int], priors: Array[float], agg: Dictionary,
+		envs: int) -> PackedFloat32Array:
 	var rs: Dictionary = _root_real_stats(cands, priors, agg, envs)
 	var rv: PackedFloat32Array = rs["v"]
 	var rq: PackedFloat32Array = rs["q"]
-	var best_k := 0
-	var best_sc := -INF
+	var out := PackedFloat32Array()
+	out.resize(cands.size())
 	for k in cands.size():
 		var p: float = priors[k]
 		var v_real: float = rv[k]
@@ -4128,10 +4368,223 @@ func _pick_merged(cands: Array[int], priors: Array[float], agg: Dictionary, envs
 			if pick_lcb_stdevs > 0.0 and v_real > 1.0:
 				q_use = clampf(q_real - pick_lcb_stdevs * sqrt(q_real * (1.0 - q_real) / v_real), 0.0, 1.0)
 			sc = p + prior_pick_weight * (q_use - p) * (v_real / (v_real + maxf(evidence_k, 0.0)))
-		if sc > best_sc:
-			best_sc = sc
+		out[k] = sc
+	return out
+
+
+func _pick_merged(cands: Array[int], priors: Array[float], agg: Dictionary, envs: int) -> int:
+	var scores: PackedFloat32Array = _pick_scores(cands, priors, agg, envs)
+	var best_k := 0
+	for k in cands.size():
+		# 严格大于 ⇒ 平局取下标小的（与旧实现 `sc > best_sc` + 升序扫描逐位等价）
+		if scores[k] > scores[best_k]:
 			best_k = k
 	return cands[best_k]
+
+
+# ----------------------------------------------------------------------------
+#  根节点对抗复核（2026-10-29）
+# ----------------------------------------------------------------------------
+## MCTS 的 Q 是「对手各应手的平均值」；一手只因某一条应手就崩，平均后只掉一点 ⇒ 看不出来。
+## 这里对**最终那一手**补一次最坏情况（min over 对手应手）：
+##     若次优候选的最坏效用 > 选中手的最坏效用 + `root_check_margin` ⇒ 改选次优。
+##
+## 【为什么只查最后那一手】加宽搜索（`root_width` / `playout_cap_factor` / 提子项 / 死子闸门）
+##   已逐条实测无收益（见 `交接_对战AI_20261029.md` §2）；复核不摊薄任何一次模拟。
+##
+## 【副作用纪律 —— 这里最容易出事】
+##   ① `_dc_collect` 必须临时置 false：`_area_score()`/`_result_impl()` 会把复核的静态分
+##      当叶子分收进 `_dc_sum` ⇒ 下一手的动态分中心锚点被污染（静默、只影响棋力不报错）。
+##   ② `rng.state` / `_logn` / `_ply` **用完必须恢复**：复核里的 `_prepare_root()` 若哪天
+##      开始掷骰，不恢复就会让同种子的 A/B 两侧走出不同随机流（§117 串行纪律）。
+##   ③ 复核里的 `_prepare_root()` 会覆写 `sealed_hard_*` / `ext_prior_last_*` 这些**诊断**
+##      成员变量 ⇒ 一并存回去，否则 `--sealhard` / 先验探针读到的是"对手那一手"的数。
+##   ④ 只许在 `_pick_merged()` **之后**、`_after_move()` **之前**调用（此时 `_ply == 0`，
+##      盘面 = 根局面）。`_after_move()` 会提子树为新根，再复核就盘面不对了。
+func _root_check(best_v: int, cands: Array[int], priors: Array[float],
+		agg: Dictionary, envs: int) -> int:
+	rc_cands_last = 0
+	rc_switched_last = 0
+	rc_gain_last = 0.0
+	if not root_check_enable or cands.size() < 2:
+		return best_v
+	rc_checks_total += 1
+	var ncv: int = clampi(root_check_cands, 2, cands.size())
+	var nrp: int = maxi(root_check_replies, 1)
+
+	# 候选名次与选点同一真源（§70）
+	var scores: PackedFloat32Array = _pick_scores(cands, priors, agg, envs)
+	var order: Array[int] = []
+	for k in cands.size():
+		order.append(k)
+	order.sort_custom(func(a: int, b: int) -> bool: return scores[a] > scores[b])
+
+	var bak: Dictionary = _rc_state_save()
+	var w0: float = _rc_worst_case(best_v, nrp)
+	rc_cands_last = 1
+	var alt_v := -1
+	var alt_w := -INF
+	for i in range(1, ncv):
+		var mv: int = cands[order[i]]
+		if mv == best_v:
+			continue
+		var w: float = _rc_worst_case(mv, nrp)
+		rc_cands_last += 1
+		if w > alt_w:
+			alt_w = w
+			alt_v = mv
+	_rc_state_restore(bak)
+	if rc_debug:
+		print("[rc] ply=%d cands=%d ncv=%d nrp=%d best=%d w0=%+.4f alt=%d alt_w=%+.4f"
+			% [_ply, cands.size(), ncv, nrp, best_v, w0, alt_v, alt_w])
+
+	# 灵敏度仪器：把「次优比选中手好多少」记下来，无论是否跨过阈值
+	if alt_v >= 0 and w0 >= 0.0 and alt_w >= 0.0:
+		var gap: float = alt_w - w0
+		rc_gap_n += 1
+		rc_gap_sum += gap
+		if gap > rc_gap_max:
+			rc_gap_max = gap
+
+	# `w < 0` = 该手非法（候选来自 `_prepare_root()`，正常不该发生）：不许当"最坏"参与比较，
+	# 否则非法手会被 λ<0 判成"特别好/特别坏"两头的伪信号（`-1.0` 既小于 w0 又大于 -INF）。
+	if w0 < 0.0:
+		return best_v
+	# 灾难闸门：选中手的最坏效用还没差到地板以下 ⇒ 一律不改选（理由见 `root_check_veto_floor`）
+	if w0 >= root_check_veto_floor:
+		return best_v
+	if alt_v >= 0 and alt_w >= 0.0 and alt_w > w0 + root_check_margin:
+		rc_switched_last = 1
+		rc_gain_last = alt_w - w0
+		rc_switched_total += 1
+		return alt_v
+	return best_v
+
+
+## 复核的现场快照（见 `_root_check()` 的副作用纪律）。
+##
+## ★★ `_b` / `_ply` / `_capsp` / 提子计数**必须整体存**（2026-10-29 实测教训）：
+##   `_prepare_root()` → `_sealed_by_opp_hard()` → `_anlz()` → `analyze_board()` →
+##   `_load_board()` ⇒ 它会把 `_ply` / `_capsp` / `_pris_*` **清零**（并把 `_b` 按
+##   `export_board()` 重灌一遍，盘面内容因此保住，但手数栈与提子账目全丢）。
+##   生产路径上看不出来：`_prepare_root()` 只在 `_ply == 0` 时被调用，清零正好是空操作。
+##   但复核是**盘上有子时**调它 ⇒ 不整体还原就会：我方落子的那条记账没了、
+##   对手应手 `_play()` 写在 `_ply=0` 上、`_undo()` 直接减到 −1（读数全是垃圾）。
+##   症状极具欺骗性：不报错、不改胜负，只是"复核永不改选"。
+func _rc_state_save() -> Dictionary:
+	return {
+		"rng": int(rng.state),
+		"b": _b.duplicate(),
+		"logn": _logn,
+		"ply": _ply,
+		"capsp": _capsp,
+		"prb": _pris_b,
+		"prw": _pris_w,
+		"ko": _ko,
+		"turn": _turn,
+		"dc": _dc_collect,
+		"sh_b": sealed_hard_blocked_last,
+		"sh_f": sealed_hard_fallback_last,
+		"ep": [ext_prior_last_mix, ext_prior_last_top1_moved, ext_prior_last_top1_rank,
+			ext_prior_last_top1_is_net, ext_prior_last_order_diff, ext_prior_last_w,
+			ext_prior_last_top1_agree],
+	}
+
+
+func _rc_state_restore(d: Dictionary) -> void:
+	rng.state = int(d["rng"])
+	_b = (d["b"] as PackedByteArray).duplicate()
+	_logn = int(d["logn"])
+	_ply = int(d["ply"])
+	_capsp = int(d["capsp"])
+	_pris_b = int(d["prb"])
+	_pris_w = int(d["prw"])
+	_ko = int(d["ko"])
+	_turn = int(d["turn"])
+	_dc_collect = bool(d["dc"])
+	sealed_hard_blocked_last = int(d["sh_b"])
+	sealed_hard_fallback_last = int(d["sh_f"])
+	var ep: Array = d["ep"]
+	ext_prior_last_mix = int(ep[0])
+	ext_prior_last_top1_moved = int(ep[1])
+	ext_prior_last_top1_rank = int(ep[2])
+	ext_prior_last_top1_is_net = int(ep[3])
+	ext_prior_last_order_diff = int(ep[4])
+	ext_prior_last_w = float(ep[5])
+	ext_prior_last_top1_agree = int(ep[6])
+
+
+## 一个候选手的**最坏情况效用**（我方视角 [0,1]，越大越好）；−1 = 该手非法。
+##
+## 流程：我方落子 → 用**引擎自己的根层候选生成**算对手的好手 → 逐个落子打分（我方效用）
+## → 取最小 → **整体还原现场**（见 `_rc_state_save()` 的注释：不能靠 `_undo()`，
+##   因为中间的 `_prepare_root()` 会清空手数栈）。
+##
+## ⚠️ `_prepare_root()` 是 **`ai_color` 相对**的（`_sealed_by_opp_hard()` 与征子推演都读
+##   `ai_color`）⇒ 要算"对手眼中的好手"，必须**临时把 `ai_color` 换成对手**再调用。
+##   不换的话拿到的是"我方视角下对手的坏手"，最坏情况会被系统性低估（复核就等于没做）。
+func _rc_worst_case(m: int, nrp: int) -> float:
+	var snap0: Dictionary = _rc_state_save()
+	if _play(m) < 0:
+		_rc_state_restore(snap0)
+		return -1.0
+	var mine: int = ai_color
+	# 我方落子后的完整现场：`_prepare_root()` 会破坏它，算完必须整块搬回来
+	var snap_m: Dictionary = _rc_state_save()
+	var ac_bak: int = ai_color
+	ai_color = 3 - mine
+	var info: Dictionary = _prepare_root(m)
+	ai_color = ac_bak
+	_rc_state_restore(snap_m)
+
+	var rcands: Array[int] = info["cands"]
+	var worst := 2.0
+	if rcands.size() == 0:
+		# 对手无着可下（只能停一手）⇒ 没有应手可 rollout，直接评估当前盘面
+		worst = _rc_util_now(mine)
+	else:
+		var nr: int = mini(nrp, rcands.size())
+		var got := false
+		for i in nr:
+			if _play(rcands[i]) < 0:
+				continue
+			got = true
+			var u: float = _rc_rollout_util(mine, rcands[i])
+			if u < worst:
+				worst = u
+			_undo()
+		if not got:
+			worst = _rc_util_now(mine)
+	_rc_state_restore(snap0)
+	return worst
+
+
+## 复核的评估口径：**从当前位置跑一次 rollout**，再折成 `mine` 方效用（[0,1]）。
+##
+## ★★ 为什么必须是 rollout，而不是「落两子后看静态分」（2026-10-29 实测否决）：
+##   静态口径在 2 手深度上**根本分不出候选**——120 格盘、开局阶段两边候选的最坏静态目差
+##   全是 `+2.0`，全部样本的最大 gap 只有 **2.0 目**（`rc_gap_max`，n=95），
+##   于是复核永远不触发。原因是 `_area_score()` 只数「盘上子 + 归属空区」，几乎整数化，
+##   而灾难手要 3~5 手的连续手段（做活/对杀）才在盘面上显形。
+##   rollout 天然走完这个序列 ⇒ 灾难会在效用上显形。
+##
+## ★ 单位说明：`_playout()` 返回的是 `_result_impl()` 的效用（tanh 压过、含动态分中心），
+##   所以阈值 `root_check_margin` 也按效用谈（0.08 ≈ 一个明显的胜率差）。
+##   tanh 的 `clamp(±√n·scale)` 软截断会让极端值并列在 0.9577 / 0.0423 —— 复核只用
+##   **相对**比较，且 rollout 结果有真实离散度，不受这个并列影响（静态口径才被它害死）。
+##
+## ⚠️ `_playout()` 会消耗 RNG 并临时落子，但它内部按 `base` 回卷、`_turn`/`_ko` 复原；
+##   调用方（`_rc_worst_case`）另外整体还原现场，两层保险（§117 串行纪律）。
+func _rc_rollout_util(mine: int, last: int) -> float:
+	var u: float = _playout(last)        # 白方视角
+	return u if mine == WHITE else 1.0 - u
+
+
+## 稀有分支用（对手只能停一手时没有 rollout 可跑）：直接对当前盘面折效用。
+func _rc_util_now(mine: int) -> float:
+	var u: float = _result_impl(0.0)
+	return u if mine == WHITE else 1.0 - u
+
 
 
 ## 动态分中心效用探针（--dcwtest 自检专用，2026-10-05）。
@@ -4688,6 +5141,9 @@ func choose_move(board_dict: Dictionary, ko: int, ai: int = -1) -> int:
 			prof_search_us += Time.get_ticks_usec() - ts0
 			last_depth = prof_depth_max
 		var best_v: int = _pick_merged(cands, priors, agg, W)
+		# ★ 根节点对抗复核（默认关，`root_check_enable`）：只可能在选点之后改选，
+		#   必须在 `_after_move()` 之前（它会把子树提为新根，盘面就不是根局面了）。
+		best_v = _root_check(best_v, cands, priors, agg, W)
 		# 快照必须在 `_after_move()` **之前**取：它会把子树提为新根，根分布随即失效。
 		# 统计（真实访问 / 真实 Q / 注入量）全部来自 `_root_real_stats()` 这一处，
 		# 与 `_pick_merged()` 选点用的是同一份数（§136）。
@@ -4744,6 +5200,9 @@ func choose_move(board_dict: Dictionary, ko: int, ai: int = -1) -> int:
 	# 树复用时子节点集合可能与本次 cands 不完全一致 → 按 move 对齐，对不上的当作「无证据」。
 	var agg := _agg_from_children(root.children, cands)
 	var best_v: int = _pick_merged(cands, priors, agg, 1)
+	# ★ 根节点对抗复核（同上）：两条选点路径都要挂，否则「简单档（单线程）」
+	#   与「普通/困难档（并行）」就是两套决策规则（曾经因此测错过并行路径）。
+	best_v = _root_check(best_v, cands, priors, agg, 1)
 	# 同上：快照取在 `_after_move()` 之前（树复用会把子树提为新根）。
 	# 三个量同源于 `_root_real_stats()` —— 别在这里另算一份（§8 / §136）。
 	var _rs: Dictionary = _root_real_stats(cands, priors, agg, 1)

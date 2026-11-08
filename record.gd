@@ -71,9 +71,13 @@ static func color_tag(color: int) -> String:
 ##   另附一份可读名（`mode_name` 等）纯粹给人看，复盘器一律读整数值。
 ## gen_fp = 生成器指纹（由 game.gd 拼：盘型 + 所有影响几何的参数），
 ##   seed = `game.gd::_rand_seed`（固定档为 0：固定盘"无种子也确定"）。
+## `board_random` = 这张盘是不是「XX随机」生成的（形状由种子决定）。
+## ★ 2026-11-06 新增，**可选**（旧谱没有这个键 ⇒ `.get(..., false)` = 固定形状）。
+## ★ 为什么必须落进谱里：复盘只靠「盘型 + 档位 + 种子」，而同一个种子在
+##   「固定几何」与「随机形状」两条路上会生成**两张不同的盘** ⇒ 不记这一位就没法还原。
 static func new_record(mode: int, board_type: int, board_size: int,
 		seed: int, komi: int, gen_fp: String, players: Dictionary,
-		kind: int = KIND_HUMAN) -> Dictionary:
+		kind: int = KIND_HUMAN, board_random: bool = false) -> Dictionary:
 	return {
 		"format_version": FORMAT_VERSION,
 		"game_build": GAME_BUILD,
@@ -86,6 +90,7 @@ static func new_record(mode: int, board_type: int, board_size: int,
 		"board_type": board_type,
 		"board_size": board_size,
 		"board_seed": seed,
+		"board_random": board_random,
 		"komi": komi,
 		"players": players.duplicate(),
 		# ★ `result` 为 null = 这局还没终局。复盘器看到 null 就知道这是半局（`INTERRUPTED`）。

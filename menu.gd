@@ -170,12 +170,14 @@ const BOARD_KINDS: Array = MenuModel.BOARD_KINDS
 const HAT_KINDS: Array = MenuModel.HAT_KINDS
 
 ## 棋盘清单的**说明**保留在这里（清单本身在 `MenuModel.BOARD_KINDS`）：
-## enabled=true 的项选中后向右折叠出二级菜单 —— **普通棋盘 = 大小三档（随机/标准/加强）；
-## 「爱因斯坦」= 种类三档（帽子/海龟/幽灵）**；两种含义复用同一套折叠机制
-## （同一 group 名、同样 3 个槽位），语义判据见 `MenuModel.slot_meaning()`。
-## enabled=false 是**待开发占位**（灰红描边、点了弹「开发中」提示），只为把循环行撑满 ——
-## 行里只有 2 项时循环滚动会出现左右相邻两块同名（"怎么有两个立方体"），占位块把周期拉长即可。
-## ⚠️ 手机菜单不铺占位项（竖排列表没有循环周期问题）。
+## ★★ 2026-11-07 最终形态 —— **8 个下拉选项**，不是瓷砖、也不是循环行：
+##   · 彭罗斯 / 彭罗斯随机 / 立方体 / 立方体随机 / 筝形 / 雪花 / 雪花随机 / 爱因斯坦；
+##   · 「XX随机」= 同一格数档下**形状随机**（`GameConfig.board_random_shape`），格数仍由
+##     小/中/大三档决定 —— 与"随机盘型/随机档"都不是一回事，见 `GameConfig.board_random_shape` 的注；
+##   · **筝形没有随机版**（生成器不支持）；**爱因斯坦也没有**（非周期单瓦片密铺，本身就随机，
+##     11-07 用户裁决删掉冗余的「爱因斯坦随机」）⇒ 只有 8 项而不是 10 项；
+##   · 占位项（`敬请期待①②`）**整族删除** —— 它们只为撑满旧的循环行周期。
+## 二级行（大小 / 种类）仍然是瓷砖，语义判据见 `MenuModel.slot_meaning()`。
 
 # 瓷砖标签排版：文字放在瓷砖「外侧」——主按钮置于上顶点之上，折叠子项置于远离折叠中心的一侧，
 # 保证文字既不与瓷砖边缘线交叠，也不压住中心的黑子标记。
@@ -234,8 +236,8 @@ const PORTRAIT_BAND_SLACK: float = 1.10
 ## 一行 3 块并排时的总宽系数：3 块本体(6R) + 2 个间隙(2*TILE_GAP_RATIO*R)。
 ## 由 TILE_GAP_RATIO 推导，改间距时不必再手改这里的数字。
 const ROW_SPAN: float = 6.0 + 2.0 * TILE_GAP_RATIO
-## 棋盘大小那三档的**折叠进度**（`_board_t` → `_board_target`）缓动时长（秒）。
-const BOARD_FOLD_TIME: float = 0.35
+# ⚰️ 2026-11-06 墓碑（名字不许回收）：`BOARD_FOLD_TIME`（棋盘折叠缓动时长）已删除 ——
+#   棋盘行改成**下拉列表**之后，「收回 → 整行滑行 → 再展开」这条链没有生产者了。
 ## 行标题顶端留白（像素）。行标题从**行带内部顶端**起画，故这是相对行带顶的偏移。
 const ROW_HEAD_TOP: float = 6.0
 ## 行标题文字底边与「本行瓷砖标签」顶边之间必须留出的净空（像素）。
@@ -348,9 +350,36 @@ var _uni_box: Dictionary = {}
 # ★ 2026-10-09：这里原有 `_diff_t` / `_diff_target` 两个「难度折叠进度」成员 ——
 #   难度三档平铺进「对战方式」行、不再有长出/收回动画 ⇒ 进度没有生产者，整族删除。
 #   ⚠️ 名字不许回收（铁律 §18）。
-var _board_t: float = 0.0                     # 棋盘「大小」折叠进度：0 折叠(无) → 1 展开(随机/标准/加强 贴彭罗斯右侧)
-var _board_target: float = 0.0               # 目标进度，由 _sel_board == BOARD_PENROSE 决定
-var _board_pending: int = -1                  # 待切换的棋盘类型（彭罗斯↔立方体锚点不同）：先收回 → 收完换锚点 → 再展开
+# ⚰️ 2026-11-06 墓碑（名字不许回收）：`_board_t` / `_board_target`（大小行折叠进度）、
+#   `_board_pending`（切换中继）、以及它们的驱动链（`_select_board()` 的三段式动画、
+#   `_commit_board_pending()`、`_eff_board()`、`_process` 里那段缓动）**整族删除**。
+#   起因：用户口令「选项太多了，就改成下拉列表选择」⇒ 棋盘行从"一排瓷砖"变成
+#   一个 `OptionButton`，而"整行平移/贴着选中块展开"这套动画只对瓷砖成立。
+var _board_opt: OptionButton = null           # 棋盘下拉（PAGE_MAIN 建、切页销毁）
+## 行带矩形 `{group: Rect2}`（`_layout_setup()` 每轮重写）。
+## 用途：棋盘下拉"落在自己那一行里"的判据（`--boardtest`）；瓷砖行的几何仍由 `_items` 提供。
+var _row_bands: Dictionary = {}
+## 主菜单另外两个下拉（2026-11-07 用户口令「干脆把练习菜单的对战方式和棋盘大小也改成下拉菜单」）。
+## ★ 三者（棋盘 / 大小·种类 / 对战方式）**同一套样式与摆位**（`_style_menu_opt()` /
+##   `_place_menu_opt()`）—— 各写一份就是"某个下拉风格不一致"的来源。
+var _size_opt: OptionButton = null
+var _mode_opt: OptionButton = null
+## 三个下拉的**呼吸盒**：`{OptionButton: {normal/hover/pressed: StyleBoxFlat, base: {...}}}`。
+## ★ 为什么状态在这里而不是控件上：呼吸是**逐帧改盒的颜色**，盒实例必须被我们拿着
+##   （每帧重建 = 丢掉 hover/pressed 当前态 + 白造资源）。换主题/重建下拉时整表重写。
+## ★ key 用**实例**而不是名字：`_clear_menu_opts()` 之后旧实例会被释放，取的时候必须
+##   过一遍 `is_instance_valid()`（见 `_pulse_menu_opts()`）。
+## 控件上"不要呼吸"的标记（2026-11-07 用户口令「设置页的下拉菜单不需要动效」）。
+## ★ 必须是**控件自身的 meta**而不是调用点的一句 `if`：换主题时 `_restyle_page_buttons()`
+##   会重造整批盒子，只靠建页时的分支会把它悄悄加回呼吸表。
+const OPT_META_NO_BREATH := "opt_no_breath"
+var _opt_breath: Dictionary = {}
+## 棋盘「XX随机」那一半 —— `GameConfig.board_random_shape` 的**菜单侧真源**。
+## ★ 与 `_sel_board` 是**两根独立的轴**：前者=哪张盘，本值=形状随机与否。
+##   两者合起来才唯一确定下拉里的一项（见 `MenuModel.board_option_index()`）。
+## ⚠️ 写这两半必须**同一次**（`_select_board_pair()` 是唯一写点）：分两次写会出现
+##   "下拉已显示彭罗斯随机、状态还停在彭罗斯"的中间态，而这种中间态没有判据看得见。
+var _sel_board_random: bool = false
 var _ip_edit: LineEdit = null                # 对弈页·好友联机档：房间号输入框
 var _lobby_list_box: VBoxContainer = null    # 对弈页·公开大厅档：列表容器
 var _lobby_status: Label = null              # 状态行（搜索中 / 空 / 条数 / Steam 不可用）
@@ -369,10 +398,8 @@ var _lobby_scroll: ScrollContainer = null    # 列表滚动区
 var _code_hint: Label = null                   # 「你的房间号…」那行标签
 var _join_hint: Label = null                   # 「输入…加入」那行标签
 var _enter_btn: Button = null                  # 「Steam 建房并进入」
-## 本局设置三个下拉（2026-10-21）。★ 它们**只显示**真源（`_sel_board` / `_sel_size` /
-## `GameConfig.seat_choice`），本身不存状态 —— 见 `_refresh_duel_picks()`。
-var _duel_board_opt: OptionButton = null
-var _duel_size_opt: OptionButton = null
+## 本局**座位**下拉（2026-10-21；★ 2026-11-04 棋盘/大小两个下拉已删，见 `_refresh_duel_picks()`
+## 上方的墓碑）。它**只显示**真源 `GameConfig.seat_choice`，本身不存状态。
 var _duel_seat_opt: OptionButton = null
 var _join_btn: Button = null                  # 联机：「加入」按钮（★ 提为成员：要跟着面板宽度重排）
 
@@ -454,6 +481,37 @@ var _cursor_cb: CheckButton = null        # 开关：true = 用自定义三角�
 var _graph_cb: CheckButton = null
 var _cursor_sl: HSlider = null            # 滑条：**值是 0..3 的档位下标**（不是像素！见 GameConfig.cursor_size_for_index）
 var _cursor_val: Label = null             # 当前档文案（如「96 px」）
+
+# 「麦克风」调试控件（设置页，2026-11-01 用户口令「记得在设置里也加上麦克风调试」）
+# ★ 为什么全部存成员变量：`--mictest` 要在**真实交互路径**上操作它们（`value_changed` /
+#   `item_selected` / `pressed.emit()`），而设置页是运行时构建的 —— 没有稳定引用就只能遍历树，
+#   那样一改排版判据就漏（同上面 `_cursor_*` 那组的理由）。
+var _mic_voice: VoiceChat = null          # 调试实例（与对局**同一套**采集/编解码，不是旁路）
+var _mic_status: Label = null             # "能用 / 不能用（为什么）"——一句人话
+var _mic_bar: _MicBar = null              # 音量+阈值合成的一条（见 `_MicBar` 的头注）
+var _mic_vad_val: Label = null            # 阈值文案（"关" / "25.0%"），换算在 `_vad_text()`
+var _mic_dev_pick: OptionButton = null
+var _mic_out_pick: OptionButton = null    # 扬声器（`AudioServer.output_device`）
+var _mic_mon_btn: Button = null           # 「测试麦克风」开关（toggle）
+# ★ 本组只有一个可调参数（用户 2026-11-01 口令：只留设备 + 声音阈值）。
+#   采集增益 / 播放增益 / 抖动缓冲 / 录制回放 已从界面撤掉 —— 真源仍在 `GameConfig`，
+#   走默认值，对局链路照旧读；撤的是旋钮不是能力。
+## 设备下拉的**索引 → 名字**映射（第 0 项恒为"（系统默认）"）。
+## ★ 为什么不直接读 `_mic_dev_pick.get_item_text(i)`：那是 UI 投影，随时可能被
+##   `_refresh_mic_devices()` 重建；而 `item_selected` 回调拿到的只是 index，
+##   没有这份表就只能"从控件反查数据"（本工程"数据与显示互为真源"的老坑）。
+var _mic_dev_names: Array[String] = []
+var _mic_out_names: Array[String] = []
+## 判据探针：`_on_mic_device_selected()` 被真实调用的次数（`--mictest` ④ 读它）。
+## ★ 存在的唯一理由：`OptionButton.select()` 到底触不触发 `item_selected` 是**引擎口径**，
+##   不能靠读文档赌 —— 赌错的症状是"打开设置页就切了一次输入设备"（静默、只影响有多个麦克风的人）。
+var _mic_dev_hits: int = 0
+## 电平条刷新节流累加器（秒）。★ 约 0.08s 一次：每帧都写 Label 会触发一次文本重排，
+## 而电平条本身只有 20px 高 —— 60fps 刷它纯属白烧（且看不出区别）。
+var _mic_tick_acc: float = 0.0
+## 上一帧写进状态 Label 的文案。★ 只在**变了**的时候写：`Label.text = 同一串` 也会触发
+## 最小尺寸重算，进而在 `ScrollContainer` 里抖动。
+var _mic_status_text: String = ""
 # ⚠️ 曾经有个 `_cursor_syncing` 递归守卫 —— 改用 `set_*_no_signal()` 之后它就没用了，
 #    已删。留着的坏处是把"信号从源头掐掉"和"容许信号发出来再挡回去"两种口径并存，
 #    以后有人删掉 no_signal 会以为还有守卫兜着（死变量比没有更危险）。
@@ -494,7 +552,9 @@ var _labelpos_done: bool = false               # --labelpos 只打印一次
 const DIFF_HARD: int = GameConfig.AI_HARD
 
 # 对战设置的选择状态（跨页保留）
-var _sel_size: int = GameConfig.STANDARD     # 默认「标准」：彭罗斯→120 落子格、立方体→4 环/183 落子格
+## 默认 = 中档 13×13（★ 2026-11-06 三档改成 9×9/13×13/19×19 之后，"标准"这个名字已退役，
+## 但枚举值 STANDARD(1) 仍是中档 —— 保留号、换语义，避免动 record 格式）。
+var _sel_size: int = GameConfig.STANDARD
 											# （随机档 = 每局现场生成约 200 格，见 game.gd random_target_tiles）
 var _sel_mode: int = MODE_LOCAL   # 取值域 = MODE_LOCAL / MODE_VS_AI / MODE_XGAI / MODE_LIUSHUI / MODE_YEMA（五块瓷砖一一对应）
 var _sel_netmode: int = NET_INVITE           # 联机方式：默认「邀请好友」
@@ -1154,83 +1214,66 @@ func _steam_ui_self_test() -> void:
 			"档位=%s 按下态=%s 大厅块可见=%s 联机块可见=%s" % [
 				_netmode_label(_sel_netmode), str(tabs12),
 				str(_duel_lobby_box.visible), str(_duel_invite_box.visible)]])
-	# ── ⑬ 对弈页页首必须写出「本局棋盘」，且跟着主菜单的选择变 ────────────────
-	#   ★ 用户的真实问题（2026-10-21）：「邀请好友在哪里选择棋盘呢？」—— 本页是联机**唯一**
-	#     入口，而盘的真源在**主菜单的棋盘行**。不写这一格，玩家要么以为联机页能选盘，
-	#     要么以为"我在菜单选的盘就是这局用的盘"—— 而联机的盘实际由**房主**定
-	#     （`game.gd::_send_init()` 把顶点/瓷砖/邻接/盘型标记/种子整套下发给加入方）。
-	#   ★ 判据必须**真的换一张盘再读**：只断"文本非空"抓不住"写死了第一张盘名"这种坏法。
+	# ── ⑬ 对弈页页首必须写清**本局怎么定盘**，且不许再报具体盘名 ──────────────
+	#   ★★ 2026-11-03 口径变更（用户口令「先确认两个人之后，每个人各选一张图，然后在这两张图
+	#     里面随机选取一个开始对局」）：联机的盘**不再由房主一家决定** ⇒ 页首那句
+	#     「本局棋盘：X（以房主所选为准）」现在是**假的**（量具说谎比不显示更坏），
+	#     改成只说明规则。**口径变了就改判据、不许删**（§127），而且正负仍要成对：
+	#       正 = 规则必须写出来（含「各选一张」与「随机抽」两件事）；
+	#       负 = **换一张盘之后页首一个字都不许变** —— 谁把"报盘名"那种旧文案加回来，这条立刻红。
 	var bak13_board: int = _sel_board
 	var bak13_size: int = _sel_size
-	var sum13a: String = _duel_board_summary()
+	_set_page(PAGE_LOBBY)                  # 重建页 ⇒ `_refresh_duel_header()` 重新派生
+	var head13a: String = ""
+	if _duel_me != null and is_instance_valid(_duel_me):
+		head13a = _duel_me.text
 	var other13: int = GameConfig.BOARD_SNOWFLAKE if bak13_board != GameConfig.BOARD_SNOWFLAKE \
 			else GameConfig.BOARD_CUBE
 	_select_board(other13)                 # 真实入口：玩家点棋盘瓷砖走的就是它
-	_commit_board_pending()                # `_select_board` 只置"待切换"，落定要这一下
-	_set_page(PAGE_LOBBY)                  # 重建页 ⇒ `_refresh_duel_header()` 重新派生
-	var head13: String = ""
+	_set_page(PAGE_LOBBY)
+	var head13b: String = ""
 	if _duel_me != null and is_instance_valid(_duel_me):
-		head13 = _duel_me.text
-	var want13: String = MenuModel.board_label(other13)
-	var old13: String = MenuModel.board_label(bak13_board)
-	var c13: bool = sum13a != "" and head13.contains(want13) \
-			and (old13 == want13 or not head13.contains(old13))
-	checks.append(["⑬ 对弈页页首写出本局棋盘｜换盘后跟着变，不是写死的", c13,
-			"换盘前摘要=「%s」→ 换盘后页首=「%s」（期望含「%s」）" % [sum13a, head13, want13]])
+		head13b = _duel_me.text
+	var rule13: bool = head13a.contains("各选一张") and head13a.contains("随机抽")
+	var stable13: bool = head13a != "" and head13a == head13b
+	checks.append(["⑬ 对弈页页首写清「各选一张随机抽」｜换盘后不许改口报盘名",
+			rule13 and stable13,
+			"换盘前=「%s」｜换盘后=「%s」（规则=%s 稳定=%s）" % [
+				head13a, head13b, str(rule13), str(stable13)]])
 	# 还原：选择与页面都回到原样（后面的判据与退出都依赖「好友联机」档 + 原盘）
 	_select_board(bak13_board)
-	_commit_board_pending()
 	_sel_size = bak13_size
 	_set_page(PAGE_LOBBY)
 
-	# ── ⑭ 本局设置三个下拉：全棋盘列表 / 座位可写 / 爱因斯坦禁用大小 ──────────────
-	#   ★ 必须**从控件出发**（同 ⑫a 的纪律）：直接调 `_on_duel_board_pick()` 只证明"函数在"，
-	#     证明不了下拉真的连着它 —— "下拉没接线"正是"选了没反应"那一族。
-	#   ★ 三件事一起断：① 项数（"全部棋盘" = **启用**盘数，占位「敬请期待」不许进）
-	#     ② 选了之后**真源**真的变（`_sel_board` / `GameConfig.seat_choice`）
-	#     ③ 爱因斯坦盘下大小下拉必须禁用（它的大小由种类决定）。
-	#   ★ 座位表与常量必须一一对上（"索引即常量"）：顺序错了 = 选「我执白」发出黑棋，
-	#     而且**一条错都不报**（只是两个人坐反了）。
-	var kinds14: Array = MenuModel.enabled_board_kinds()
-	var cnt14_board: int = _duel_board_opt.item_count if _duel_board_opt != null and is_instance_valid(_duel_board_opt) else -1
-	var cnt14_size: int = _duel_size_opt.item_count if _duel_size_opt != null and is_instance_valid(_duel_size_opt) else -1
-	var cnt14_seat: int = _duel_seat_opt.item_count if _duel_seat_opt != null and is_instance_valid(_duel_seat_opt) else -1
-	var ok14_n: bool = cnt14_board == kinds14.size() and cnt14_size == MenuModel.slots().size() \
-			and cnt14_seat == 3
+	# ── ⑭ 本页**只剩**座位下拉，且它真的连着 `GameConfig.seat_choice` ─────────────
+	# ★★ 2026-11-04 重写（用户口令「虽然现在是选择棋盘制，但对弈菜单还能选棋盘，好好设计一下」）：
+	#   旧判据断的是"三个下拉：全棋盘列表 / 座位可写 / 爱因斯坦禁用大小"。棋盘与格数现在
+	#   都在**对局内**定（房主定格数档 → 双方各选一张 → 随机抽），本页那两个下拉是死旋钮 ⇒
+	#   连函数带判据一起撤，**口径换成"只剩座位"**（§127：口径变了就改判据、不许删）。
+	# ★ 最有牙齿的是第一条：从**控件树**里数 `OptionButton`，数量必须恰好 1 ——
+	#   谁把棋盘/大小下拉加回来，这里当场红（按名字认函数是抓不到"又加了个新下拉"的）。
+	# ★ 第二条仍要"真选一次"（从控件自己的信号出发）：只断"下拉存在"证明不了它接到了真源，
+	#   而"下拉没接线"正是"选了没反应"那一族。
+	var opts14: Array = _duel_root.find_children("*", "OptionButton", true, false)
+	var ok14_only: bool = opts14.size() == 1 and opts14[0] == _duel_seat_opt
+	var cnt14_seat: int = _duel_seat_opt.item_count \
+			if _duel_seat_opt != null and is_instance_valid(_duel_seat_opt) else -1
+	var ok14_n: bool = cnt14_seat == SEAT_PICK_LABELS.size()
 	var ok14_map: bool = SEAT_PICK_LABELS.size() == 3 and GameConfig.SEAT_BLACK == 0 \
-			and GameConfig.SEAT_WHITE == 1 and GameConfig.SEAT_RANDOM == 2
-	var bak14_board: int = _sel_board
-	var bak14_size: int = _sel_size
+			and GameConfig.SEAT_WHITE == 1 and GameConfig.SEAT_RANDOM == 2 \
+			and SEAT_PICK_LABELS[0] == "我执黑" and SEAT_PICK_LABELS[1] == "我执白" \
+			and SEAT_PICK_LABELS[2] == "随机"
 	var bak14_seat: int = int(GameConfig.seat_choice)
-	var i14_snow: int = -1
-	var i14_hat: int = -1
-	for i in kinds14.size():
-		if int(kinds14[i]["id"]) == GameConfig.BOARD_SNOWFLAKE:
-			i14_snow = i
-		if int(kinds14[i]["id"]) == GameConfig.BOARD_HAT:
-			i14_hat = i
-	if i14_snow >= 0 and _duel_board_opt != null and is_instance_valid(_duel_board_opt):
-		_duel_board_opt.select(i14_snow)
-		_duel_board_opt.item_selected.emit(i14_snow)     # ★ 真选：走控件自己的信号
-	var ok14_board: bool = _sel_board == GameConfig.BOARD_SNOWFLAKE
 	if _duel_seat_opt != null and is_instance_valid(_duel_seat_opt):
 		_duel_seat_opt.select(1)
 		_duel_seat_opt.item_selected.emit(1)
 	var ok14_seat: bool = int(GameConfig.seat_choice) == GameConfig.SEAT_WHITE
-	if i14_hat >= 0 and _duel_board_opt != null and is_instance_valid(_duel_board_opt):
-		_duel_board_opt.select(i14_hat)
-		_duel_board_opt.item_selected.emit(i14_hat)
-	var ok14_dis: bool = _duel_size_opt != null and is_instance_valid(_duel_size_opt) \
-			and _duel_size_opt.disabled
-	checks.append(["⑭ 本局设置下拉：全棋盘列表 + 座位可写 + 爱因斯坦禁用大小",
-			ok14_n and ok14_map and ok14_board and ok14_seat and ok14_dis,
-			"项数(棋盘%d/期望%d 大小%d/期望%d 座位%d/期望3) 座位映射=%s 选雪花后=%d 选白后seat=%d 帽子下大小禁用=%s" % [
-				cnt14_board, kinds14.size(), cnt14_size, MenuModel.slots().size(), cnt14_seat,
-				str(ok14_map), _sel_board, int(GameConfig.seat_choice), str(ok14_dis)]])
-	# 还原：选择与页面（后面的判据与退出都依赖「好友联机」档 + 原盘 + 原座位）
-	_select_board(bak14_board)
-	_commit_board_pending()
-	_sel_size = bak14_size
+	checks.append(["⑭ 本页只剩座位下拉 · 控件树里 OptionButton 恰好 1 个 · 且它真的写 GameConfig",
+			ok14_only and ok14_n and ok14_map and ok14_seat,
+			"OptionButton %d 个（期望 1）｜座位项数 %d/期望 %d｜映射=%s｜选白后seat=%d" % [
+				opts14.size(), cnt14_seat, SEAT_PICK_LABELS.size(), str(ok14_map),
+				int(GameConfig.seat_choice)]])
+	# 还原：页面与座位（后面的判据与退出都依赖「好友联机」档 + 原座位）
 	GameConfig.seat_choice = bak14_seat
 	_set_page(PAGE_LOBBY)
 	# 复原：档位回「好友联机」、清掉 force_missing，别把状态留给后面的判据/退出
@@ -1484,6 +1527,10 @@ func _ready() -> void:
 	# 自检：--settest 设置页分栏布局量化（左预览 / 右内容，防「横向拉太长、预览太小」回归）
 	if "--settest" in _argv():
 		_settings_layout_test()
+	# 自检：--mictest 设置页麦克风调试组（2026-11-01 用户口令「记得在设置里也加上麦克风调试」）
+	#   ★ 纯本地、不联网、**不需要真麦克风**：电平与回放走"直接喂合成采集块"，不依赖音频驱动。
+	if "--mictest" in _argv():
+		_mic_debug_self_test()
 	# 自检：--boardtest 棋盘类型切换的收回/展开动画
 	if "--boardtest" in _argv():
 		_board_fold_test()
@@ -1585,58 +1632,29 @@ func _forget_menu_items() -> void:
 
 func _set_page(page: int) -> void:
 	_page = page
-	# 页面重建是硬切，没有动画可依附 → 待切换的棋盘类型立即落定，避免凹陷态与实际开局不一致
-	if _board_pending >= 0:
-		_sel_board = _board_pending
-		_board_pending = -1
 	_forget_menu_items()          # 上一页的条目/下标/棋子一起清（见该函数的说明）
 	_clear_settings_ui()          # 切换页面时销毁上一页的原生设置控件（若有）
 	_clear_records_ui()           # 棋谱面板的原生控件树同理（两个面板不会同时在，但两处都要清）
 	_clear_duel_ui()             # 对弈页（联机大厅）的原生控件树同理（三个面板不会同时在，但三处都要清）
+	_clear_menu_opts()           # 三个下拉（原生控件，不属于 `_items`）—— 切页必须销毁
 	var descriptors: Array[Dictionary] = []
 	match page:
 		PAGE_MAIN:
 			_title.text = "瓷砖围棋"
-			# 棋盘类型（横排循环行，顺序与条目全部来自 BOARD_KINDS）
-			for kind in BOARD_KINDS:
-				var kid: int = int(kind["id"])
-				var k_en: bool = bool(kind["enabled"])
-				var k_lbl: String = str(kind["label"])
-				var k_cb: Callable = (func() -> void: _select_board(kid)) if k_en \
-					else (func() -> void: _show_error_toast("「%s」还在开发中，敬请期待" % k_lbl))
-				descriptors.append({"label": k_lbl, "group": "board", "sel": k_en and _sel_board == kid,
-					"cb": k_cb, "disabled": not k_en})
-			# 二级行（紧贴选中块外侧折叠展开，仿「人机+三难度」结构；循环行里每一项都有 → 恒开）。
-			# ★★ 这一行有**两种含义**，由「有效选中的棋盘」决定 ——
-			#   · 普通棋盘 = 棋盘大小三档（全局槽位 RANDOM/STANDARD/ENHANCED）。槽位 0 的显示名
-			#     随棋盘类型变：只剩筝形盘没有随机档 → 它下面槽位 0 是「迷你」固定盘（R=2，72 格），
-			#     其余棋盘都显示「随机」（雪花 2026-09-16、爱因斯坦 2026-09-19 起都有真随机档；
-			#     「迷你」固定档仍可用 --snowmini 等 flag 钉层数/R 取到）。
-			#   · 爱因斯坦 = **种类三档（帽子/海龟/幽灵）** —— 它只适合做随机盘（约 200 格），
-			#     大小三档对它没有意义，正好把这一行让给「种类」（用户口径：三个种类都是随机约 200 格）。
-			# 两者复用同一套折叠机制（同一个 group 名 "boardsize" + 同样 3 个槽位），所以布局 /
-			# 折叠动画 / 标签放射散布 / --labeltest 全都不用改；差别只有 label 与 size_id 的含义
-			# （回调已统一成 `_activate_size_slot` —— 它是「点的第几个槽位」，含义在点击时现判）。
-			# 每一项都带 size_id，选中匹配与布局收集都按 size_id 走（标签会随棋盘变，不能按字面匹配）。
-			# ★★ 二级行的三个槽位：标签 / 选中态 / 回调**全部走同一个「槽位」口径**
-			#    （`_size_slot_label()` / `_size_slot_selected()` / `_activate_size_slot()`），
-			#    这里不再按棋盘分叉各写一套。
-			#    ⚠️ 为什么必须这样（2026-09-19 用户报的两个 bug，**同一个根因**）：
-			#    这一行是「同一组物理瓷砖、两种含义」，而页面**只在 _set_page 重建**；
-			#    用户点棋盘类型只走 `_refresh_selection()`，原实现在那里**只改写 `label`、不动 `cb`** →
-			#      · 先在彭罗斯下建行（cb = _select_size）、再切到爱因斯坦：字变成了「帽子/海龟/幽灵」，
-			#        回调还是 `_select_size` → **点种类毫无反应**（`_sel_hatkind` 永不变，凹陷态停在帽子）；
-			#      · 反向（爱因斯坦 → 彭罗斯）更直白：非种类分支只改写槽位 0 的标签，
-			#        槽位 1/2 留着「海龟/幽灵」→ **其他棋盘的标准/加强被"改名"**。
-			#    根因一句话：**行的语义随棋盘变了，回调却没跟着变**。
-			#    现在回调是「激活第 slot 个槽位」，含义在**点击那一刻**由 `_is_hat_eff()` 现判 ——
-			#    与标签用同一个判据 → 两者结构上不可能再打架。
-			#    （两种含义都恰好 3 个槽位：槽位号 0/1/2 同时是 RANDOM/STANDARD/ENHANCED 与三个种类 id；
-			#     `--einsteintest` 里钉了「HAT_KINDS 恰好 3 项」，将来加种类必须同时改这里。）
-			for slot in [GameConfig.RANDOM, GameConfig.STANDARD, GameConfig.ENHANCED]:
-				descriptors.append({"label": _size_slot_label(slot), "size_id": slot,
-					"group": "boardsize", "sel": _size_slot_selected(slot),
-					"cb": Callable(self, "_activate_size_slot").bind(slot), "disabled": false})
+			# ★★ 2026-11-06：棋盘行**不再建瓷砖**，改成原生下拉（用户口令「选项太多了，
+			#   就改成下拉列表选择」）。9 个选项 = 4 张盘 × 固定/随机 + 筝形（没有随机版）。
+			#   ⚠️ 因此 `_items` 里**没有** group=="board" 的条目了 —— 凡是按这个 group
+			#     数块/找块/量可点的地方都得改（`_main_row_roster` / `--menutest` ③⑤ /
+			#     `--labeltest` / `_refresh_selection` 都改过了）。
+			_build_board_opt()
+			# ★★ 2026-11-07：「大小 / 种类」也改成**下拉**（用户口令「干脆…也改成下拉菜单」）。
+			#   这一行原本是**同一组 3 块瓷砖承载两种含义**（尺寸三档 ↔ 帽子三种类），
+			#   历史上为此踩过三次「行语义变了、标签/回调没跟着变」的坑（2026-09-19 / 10-09 /
+			#   11-06 的 `slot_idx`）。改成下拉之后那个坑**结构性消失**：项本身就是**重建**的
+			#   （`_rebuild_size_opt_items()`），项文本与项值从同一个数组里一次产出，不存在
+			#   "改了标签没改值"的中间态。
+			#   ★ 语义仍由 `_is_hat_eff()` 现判（爱因斯坦 = 种类，其余 = 尺寸档）。
+			_build_size_opt()
 			# ★ 2026-10-09：这里原有「难度三档建项（group = "diff"，靠 `_diff_t` 折叠展开）」——
 			#   按用户口令「人机难度不要折叠菜单，直接和本地按钮并列平铺」整段**下移**到
 			#   「对战方式」行里（见下面 本地/人机 之后那三行），group 一并改成 "mode"。
@@ -1670,58 +1688,11 @@ func _set_page(page: int) -> void:
 			#   ⚠️ 本行现在恰好 3 块，**等大、居中**（用户口令「保持和其它行一样大，只居中」）——
 			#     半径走 `_row_fit(cnt, tileR)` 而它是"先保半径"的 ⇒ 块数与棋盘行一致时
 			#     半径逐像素相同（`--labeltest` 的 [对齐] 一直断这条）。
-			# ★★ 2026-10-15b：三块的 `label` 一律走 `_mode_label()` 单一真源，别就地写字符串 ——
-			#   本轮「人机」改名「磐石」，就地写就意味着"改名必须记得改这里 + 日志那处 + 手机那处"，
-			#   而漏改的症状是**静默**的：`_auto_select()` / `--select=` / ⑭ 的样本都按 label 认瓷砖，
-			#   名字对不上时它们只会"找不到那块瓷砖"（见 `_auto_select()` 的 push_warning）。
-			descriptors.append({"label": _mode_label(MODE_LOCAL), "group": "mode", "mode_id": MODE_LOCAL,
-				"sel": _mode_tile_selected(MODE_LOCAL),
-				"cb": func() -> void: _select_mode(MODE_LOCAL), "disabled": false})
-			# ★ 2026-10-15b：本块显示名 **「磐石」**（原名「人机」，用户口令「人机这个名字和疾风
-			#   也不搭，你再改个名字」）。取名口径：与「疾风」一动一静（风 / 石），同为 2 字
-			#   ⇒ 本行三块等大居中（走 `_row_fit()`）的几何口径**一行都不用动**；
-			#   且名副其实 —— 生产引擎 30~80ms/手、17 个特征，风格稳而扎实，与骨架的"快而激进"相对。
-			#   ⚠️ 它仍**不是难度档**：20 局对骨架 14:6 但目差仅 +9.1（t=0.84 不显著）⇒ 两者同档，
-			#     两个名字都只描述**风格**，不描述强弱（叫难度会误导）。
-			descriptors.append({"label": _mode_label(MODE_VS_AI), "group": "mode", "mode_id": MODE_VS_AI,
-				"sel": _mode_tile_selected(MODE_VS_AI),
-				"cb": func() -> void: _select_mode(MODE_VS_AI), "disabled": false})
-			# ★ 2026-10-14：「测试AI」立项 —— 白方由图围棋骨架（第三套实现，1 手贪心）接管，
-			#   给用户亲测骨架棋力。`mode_id` 仍是身份字段、`sel` 仍走 `_mode_tile_selected()`
-			#   同一源；`GameConfig.mode` 只会落 VS_AI（骨架标记走 `GameConfig.xg_opponent`）。
-			# ★★ 2026-10-15 转正（用户口令「把测试AI也划为正式吧」）⇒ 定名 **「疾风」**：
-			#   · 与「本地」「磐石」同为 **2 字** —— 本行三块等大居中（走 `_row_fit()`），
-			#     4 字的"测试AI"会把块宽和字重排；换成 2 字则几何口径一行都不用动；
-			#   · 名副其实：骨架引擎实测 **0.75ms/手**（生产 30~80ms），风格快而激进（吃子优先）；
-			#   · **不叫"简单/困难"** —— 20 局对生产 14:6 但目差仅 +9.1（t=0.84 不显著）
-			#     ⇒ 两者**同档**，名字只描述**风格**（快），不描述强弱（叫难度会误导）。
-			descriptors.append({"label": _mode_label(MODE_XGAI), "group": "mode", "mode_id": MODE_XGAI,
-				"sel": _mode_tile_selected(MODE_XGAI),
-				"cb": func() -> void: _select_mode(MODE_XGAI), "disabled": false})
-			# ★ 2026-10-22 第四块「流水」（渗流引擎 `LiushuiAI`）。身份仍是 `mode_id`，
-			#   `sel` 仍走 `_mode_tile_selected()` 同一源（结构上不可能两块同时亮）。
-			#   ⚠️ 本行块数 3 ⇒ **4**：`_row_fit(cnt, tileR)` 是"先保半径"的，块数一旦与棋盘行
-			#     不一致，半径就不再逐像素相同 —— `--labeltest` 的 [对齐] 段与 `--menutest` ⑭
-			#     必须重跑（⑭ 的样本数是**现数**，不拍常数；[对齐] 若报红属预期，见该段注）。
-			#   取名口径与前三块一致（2 字、描述**风格**不描述强弱）：「流水」= 势场漫延、
-			#     渗流连通，与「磐石」的稳、「疾风」的快相对。
-			descriptors.append({"label": _mode_label(MODE_LIUSHUI), "group": "mode", "mode_id": MODE_LIUSHUI,
-				"sel": _mode_tile_selected(MODE_LIUSHUI),
-				"cb": func() -> void: _select_mode(MODE_LIUSHUI), "disabled": false})
-			# ★ 2026-10-23 第五块「野马」（神经网络先验引擎 `YemaAI`）。同样是 `mode_id` 身份，
-			#   `sel` 走 `_mode_tile_selected()` 同一源。名字 2 字，与其余四块等大（`_row_fit()`）。
-			descriptors.append({"label": _mode_label(MODE_YEMA), "group": "mode", "mode_id": MODE_YEMA,
-				"sel": _mode_tile_selected(MODE_YEMA),
-				"cb": func() -> void: _select_mode(MODE_YEMA), "disabled": false})
-			# ⚰️ 2026-10-13 墓碑（名字不许回收）：这里原有第三块「Ludii」
-			#   （`mode_id = MODE_LUDII`，`sel` 走 `_mode_tile_selected()` 同一条口径 ——
-			#   身份由 `mode_id` 认，从不按 label 认，那是 2026-10-12「点难度后实心块全灭」的教训）。
-			#   用户口令「彻底砍掉 Ludii」⇒ 整族删除，本行那时回到 **2 块**（本地 / 人机）；
-			#   2026-10-15b 起为 **3 块**（本地 / 磐石 / 疾风，全部并列互斥）。
-			#   ⚠️ 块数变了 ⇒ `--labeltest` 的 [对齐] 段与 `--menutest` ⑭ 的样本都要跟着改；
-			#     好消息是这两处现在都是**现数**（读 `_items` / 读实际块数），不再拍常数。
-			# ⚰️ 2026-10-12 墓碑（本行内，名字不许回收）：这里原有「简单 / 普通 / 困难」三块
-			#   难度瓷砖（2026-10-09 从独立 group `"diff"` 平铺进来的那一族）。
+			# ★★ 2026-11-07：「对战方式」也改成**下拉**（用户口令「干脆…也改成下拉菜单」）。
+			#   五档 本地 / 磐石 / 疾风 / 流水 / 野马，标签一律走 `_mode_label()` 单一真源。
+			#   ⚠️ 身份字段 `mode_id` 随瓷砖一起退役：下拉用**下标**定位，值从
+			#   `_mode_opt_values()` 现取（与 `_mode_label()` 同源，不会出现"标签一变认不出"）。
+			_build_mode_opt()
 			# 开始（本地 / 磐石 / 疾风都可用；**联机不走这里** —— 它有自己的页与自己的开局入口：
 			# 「对弈」页的「Steam 建房并进入」/「加入」，两处都直接写 `GameConfig` 再转场）
 			descriptors.append({"label": "开始", "group": "action", "sel": false, "cb": _start_from_setup, "disabled": false})
@@ -1775,6 +1746,11 @@ func _set_page(page: int) -> void:
 			"disabled": d["disabled"],
 			"group": d["group"],
 			"size_id": int(d.get("size_id", -99)),   # 仅 boardsize 组使用：按 id 匹配（标签随棋盘变）
+			# ★★ 2026-11-06：boardsize 组的**真正身份字段** = 物理序号（0/1/2）。
+			#   `size_id` 是它按"当前含义"派生出来的槽位号，会随含义翻而变
+			#   （尺寸 3/1/2 ↔ 帽子种类 0/1/2）；序号不会。
+			#   读者：`_refresh_selection()` 的 boardsize 臂（唯一重算点）。
+			"slot_idx": int(d.get("slot_idx", -1)),
 			# ★ 2026-10-09：`mode` 组（对战方式行）的身份字段 —— 与 `size_id` 同一个思路。
 			#   `_mode_tile_selected()` 是唯一读者。
 			# ⚰️ 2026-10-12：`diff_id` 一并删除（难度不再可选）。身份字段仍有**两个**
@@ -1800,7 +1776,6 @@ func _set_page(page: int) -> void:
 	#   （练习面板不再有联机入口，"从「线上」左侧长出两瓣"这件事不存在了）。
 	# 棋盘大小折叠目标：循环行里每一项（含占位）在_contents上都有三档大小可选 → 恒为展开。
 	# 例外只有「切换动画期间」—— _process 会先置 0 收回，等整行滑到位再置 1 展开。
-	_board_target = 1.0
 
 	# ⚰️ 2026-10-12：这里原有「选中项直接铺黑子（无需生长动画）」那一段 ——
 	#   随黑砖族整族删除。"已选"现在完全由 `_items[i]["selected"]` 表达，
@@ -1884,13 +1859,18 @@ func _model_self_test() -> void:
 
 	# ③ 选中态与标签**同源**：用两组**不同值**的状态，检验两种语义指向不同的槽位。
 	#    （若用相同的 sel_size/sel_hatkind，两种语义恰好重合，判据会假绿 —— 这里刻意分开取。）
-	var sel_size: int = GameConfig.RANDOM          # 0
+	# ★★ 2026-11-06：两套槽位表**分开**之后（尺寸 3/1/2 vs 种类 0/1/2），这里必须
+	#    **各自遍历自己的表** —— 合成一个循环就只能遍历其中一张，另一套漏掉的槽位永远查不到，
+	#    判据会变成"只验了一半"。顺带这条也就成了"表有没有被重新合并"的探测器：
+	#    合并回一张时 `size_sel` 会变成 -1（3 不在 0/1/2 里）⇒ 当场红。
+	var sel_size: int = GameConfig.SMALL          # 3（旧口径用 RANDOM=0，三档改号后 0 不再是尺寸档）
 	var sel_hat: int = GameConfig.HAT_SPECTRE      # 2
 	var size_sel := -1
 	var hat_sel := -1
-	for slot in MenuModel.slots():
+	for slot in MenuModel.size_slots():
 		if MenuModel.slot_selected(slot, false, sel_size, sel_hat):
 			size_sel = slot
+	for slot in MenuModel.hat_slots():
 		if MenuModel.slot_selected(slot, true, sel_size, sel_hat):
 			hat_sel = slot
 	var ok3: bool = size_sel == sel_size and hat_sel == sel_hat and size_sel != hat_sel
@@ -1909,56 +1889,79 @@ func _model_self_test() -> void:
 	print("[modeltest] ④ 点击落点：大小语义→%s 种类语义→%s → %s" % [
 		str(a_size), str(a_hat), "通过 ✓" if ok4 else "失败 ✗"])
 
-	# ⑤ 「爱因斯坦一律随机档」这条规则必须在**唯一落点**成立，且非帽子盘不许被改。
-	#    阴性对照就是"非帽子盘必须保留 sel_size"—— 少了那一半，判据可以用"永远返回 RANDOM"通过。
+	# ⑤ 「有效选择」的退化保证：**任何**盘型下 size 都原样透传。
+	#    ★★ 2026-11-06 换了被测物：原先是「爱因斯坦一律强制随机档」那条**已删除**的规则
+	#      （三档统一成 9×9/13×13/19×19、随机档移出尺寸栏之后，"帽子盘的大小由种类决定"
+	#       不再成立 —— 种类只换瓦片边长，与格数档正交）。
+	#      现在守的是它的**反面**：帽子盘必须吃当前档，不许被任何特殊分支改写。
+	#    阴性对照那一半保留：board=-1 必须回落到彭罗斯，且 size 也不许跟着变。
 	var ch_hat: Dictionary = MenuModel.effective_choice(
-		GameConfig.BOARD_HAT, GameConfig.ENHANCED, GameConfig.HAT_TURTLE)
+		GameConfig.BOARD_HAT, GameConfig.SMALL, GameConfig.HAT_TURTLE)
 	var ch_pen: Dictionary = MenuModel.effective_choice(
 		GameConfig.BOARD_PENROSE, GameConfig.ENHANCED, GameConfig.HAT_TURTLE)
 	var ch_neg: Dictionary = MenuModel.effective_choice(-1, GameConfig.STANDARD, GameConfig.HAT_HAT)
-	var ok5: bool = int(ch_hat["size"]) == GameConfig.RANDOM \
+	var ok5: bool = int(ch_hat["size"]) == GameConfig.SMALL \
 		and int(ch_hat["hat_kind"]) == GameConfig.HAT_TURTLE \
 		and int(ch_pen["size"]) == GameConfig.ENHANCED \
-		and int(ch_neg["board"]) == GameConfig.BOARD_PENROSE
+		and int(ch_neg["board"]) == GameConfig.BOARD_PENROSE \
+		and int(ch_neg["size"]) == GameConfig.STANDARD
 	if not ok5:
 		ok = false
-	print("[modeltest] ⑤ 有效选择：帽子盘 size=%d（应 %d）｜彭罗斯 size=%d（应 %d）｜board=-1 回落=%d → %s" % [
-		int(ch_hat["size"]), GameConfig.RANDOM, int(ch_pen["size"]), GameConfig.ENHANCED,
-		int(ch_neg["board"]), "通过 ✓" if ok5 else "失败 ✗"])
+	print("[modeltest] ⑤ 有效选择：帽子盘 size=%d（应 %d，不许被改写）｜彭罗斯 size=%d（应 %d）｜board=-1 回落=%d size=%d（应 %d）→ %s" % [
+		int(ch_hat["size"]), GameConfig.SMALL, int(ch_pen["size"]), GameConfig.ENHANCED,
+		int(ch_neg["board"]), int(ch_neg["size"]), GameConfig.STANDARD,
+		"通过 ✓" if ok5 else "失败 ✗"])
 
-	# ⑥ 恢复上一局的校验：合法采纳、占位/下线 id 整份作废、越界夹取、「线上」不恢复
+	# ⑥ 恢复上一局的校验：合法采纳、占位/下线 id 整份作废、越界不被照抄、「线上」不恢复
+	# ★★ 2026-11-06 换口径（三档改号 3/1/2 之后"夹取"这个动作在数值上已无意义 ——
+	#   枚举值不再单调，`clampi` 只会把越界值夹到某个不相干的小数字上）：
+	#     `_migrate_size()` 现在是**显式查表**，越界/脏值一律退到默认档 STANDARD。
+	#     于是本条守的是"**脏值不许被照抄**"：99 必须被换掉，且换完必须是三个合法枚举之一。
 	var r_ok: Dictionary = MenuModel.restore_state(
 		{"board": GameConfig.BOARD_HAT, "size": 99, "hat_kind": -5, "diff": 7, "mode": GameConfig.VS_AI})
 	var r_bad: Dictionary = MenuModel.restore_state({"board": -1, "size": 1})
 	var r_online: Dictionary = MenuModel.restore_state(
 		{"board": GameConfig.BOARD_PENROSE, "mode": GameConfig.ONLINE})
+	# ★ 旧记录迁移：`board_size = 0`（旧的"随机档"，实测约 200 格）必须落到 **STANDARD**，
+	#   不能夹成"最小档"（那会让旧玩家的盘突然小一半，且静默）。这条是三档改号最容易踩的坑。
+	var r_legacy: Dictionary = MenuModel.restore_state(
+		{"board": GameConfig.BOARD_PENROSE, "size": GameConfig.RANDOM})
 	# ★ 2026-10-15 `xg`（疾风档）的夹取：超界给 5 必须夹到 1，**缺省**必须给 0。
 	#   ⚠️ **两半都要断**：只断"夹到 1"的话，把 `restore_state()` 里那行写成常量 1 也照样绿。
 	var r_xg_hi: Dictionary = MenuModel.restore_state({"board": GameConfig.BOARD_PENROSE, "xg": 5})
 	var r_xg_lo: Dictionary = MenuModel.restore_state({"board": GameConfig.BOARD_PENROSE})
-	var ok6: bool = not r_ok.is_empty() and int(r_ok["size"]) == GameConfig.ENHANCED \
+	var sz_ok: int = int(r_ok.get("size", -9))
+	var sz_valid: bool = sz_ok == GameConfig.SMALL or sz_ok == GameConfig.STANDARD \
+		or sz_ok == GameConfig.ENHANCED
+	var ok6: bool = not r_ok.is_empty() and sz_valid and sz_ok != 99 \
 		and int(r_ok["hat_kind"]) == GameConfig.HAT_HAT and int(r_ok["diff"]) == 2 \
 		and int(r_ok["mode"]) == GameConfig.VS_AI \
+		and int(r_legacy.get("size", -9)) == GameConfig.STANDARD \
 		and int(r_xg_hi.get("xg", -1)) == 1 and int(r_xg_lo.get("xg", -1)) == 0 \
 		and r_bad.is_empty() and int(r_online["mode"]) == GameConfig.LOCAL
 	if not ok6:
 		ok = false
-	print("[modeltest] ⑥ 恢复校验：越界夹取 size=%d hat=%d diff=%d xg=%d（缺省→%d）｜占位 id 作废=%s｜线上→%s（应本地）→ %s" % [
-		int(r_ok.get("size", -9)), int(r_ok.get("hat_kind", -9)), int(r_ok.get("diff", -9)),
+	print("[modeltest] ⑥ 恢复校验：脏 size=99→%d（须合法且非 99）hat=%d diff=%d xg=%d（缺省→%d）｜旧记录 size=0→%d（应 %d）｜占位 id 作废=%s｜线上→%s（应本地）→ %s" % [
+		sz_ok, int(r_ok.get("hat_kind", -9)), int(r_ok.get("diff", -9)),
 		int(r_xg_hi.get("xg", -9)), int(r_xg_lo.get("xg", -9)),
+		int(r_legacy.get("size", -9)), GameConfig.STANDARD,
 		str(r_bad.is_empty()), MenuModel.mode_label(int(r_online.get("mode", -9))),
 		"通过 ✓" if ok6 else "失败 ✗"])
 
-	# ⑦ 手机菜单「大小」行的当前值：帽子盘必须说"由棋盘决定"（与 ⑤ 同源），
-	#    非帽子盘必须显示真实档位名。阴性对照同上：两半都要。
+	# ⑦ 手机菜单「大小」行的当前值：直接就是三档的对标名（9×9 / 13×13 / 19×19）。
+	#    ★★ 2026-11-06 换口径：原先帽子盘显示"由棋盘决定"（因为它的尺寸被强制成随机档）；
+	#      那条规则已删 ⇒ 三档一视同仁，帽子盘也显示真实档位名。
+	#      期望值**写字面量**而不是调 `size_label()`：判据必须独立于被测实现（否则永远绿）。
 	var sv_hat: String = MenuModel.size_row_value(GameConfig.BOARD_HAT, GameConfig.ENHANCED)
-	var sv_kite: String = MenuModel.size_row_value(GameConfig.BOARD_KITE, GameConfig.RANDOM)
-	var sv_pen: String = MenuModel.size_row_value(GameConfig.BOARD_PENROSE, GameConfig.RANDOM)
-	var ok7: bool = sv_hat == "由棋盘决定" and sv_kite == "迷你" and sv_pen == "随机"
+	var sv_kite: String = MenuModel.size_row_value(GameConfig.BOARD_KITE, GameConfig.SMALL)
+	var sv_pen: String = MenuModel.size_row_value(GameConfig.BOARD_PENROSE, GameConfig.STANDARD)
+	var sv_old: String = MenuModel.size_row_value(GameConfig.BOARD_PENROSE, GameConfig.RANDOM)
+	var ok7: bool = sv_hat == "19×19" and sv_kite == "9×9" \
+		and sv_pen == "13×13" and sv_old == "随机（旧）"
 	if not ok7:
 		ok = false
-	print("[modeltest] ⑦ 大小行文案：帽子=%s｜筝形随机档=%s｜彭罗斯随机档=%s → %s" % [
-		sv_hat, sv_kite, sv_pen, "通过 ✓" if ok7 else "失败 ✗"])
+	print("[modeltest] ⑦ 大小行文案：帽子大档=%s（应 19×19）｜筝形小档=%s（应 9×9）｜彭罗斯中档=%s（应 13×13）｜旧记录随机档=%s（应 随机（旧））→ %s" % [
+		sv_hat, sv_kite, sv_pen, sv_old, "通过 ✓" if ok7 else "失败 ✗"])
 
 	print("[modeltest] 结论：", "通过 ✓" if ok else "失败 ✗")
 	get_tree().quit()
@@ -1967,6 +1970,7 @@ func _model_self_test() -> void:
 func _select_size(id: int) -> void:
 	_sel_size = id
 	_refresh_selection()
+	_set_size_opt_selected()      # ★ 同上：下拉的 selected 由它自己维护
 
 ## 选爱因斯坦的种类（帽子/海龟/幽灵）。与 _select_size 同一套做法：只改状态 + 重绘，
 ## 不重建页面（三瓣瓷砖原位换凹陷态即可）。
@@ -1977,6 +1981,7 @@ func _select_size(id: int) -> void:
 func _select_hatkind(id: int) -> void:
 	_sel_hatkind = id
 	_refresh_selection()
+	_set_size_opt_selected()      # ★ 下拉要单独 select（`_refresh_selection()` 只管瓷砖）
 
 ## 种类 id → 显示名。★ 已委托 `MenuModel.hat_kind_label()`（两个菜单共用一份，查不到退回「帽子」）
 func _hat_kind_label(id: int) -> String:
@@ -1986,25 +1991,38 @@ func _hat_kind_label(id: int) -> String:
 ##   （`menu_mobile.gd` 的选项块调的是同一个函数）—— 这一层就是 2026-09-19 那个
 ##   「其他棋盘的标准/加强被改名」bug 的结构性防线：两个菜单不可能各写一套槽位语义。
 func _size_slot_label(slot: int) -> String:
-	return MenuModel.slot_label(slot, _is_hat_eff(), _eff_board())
+	return MenuModel.slot_label(slot, _is_hat_eff(), _sel_board)
 
 ## ★ 二级行第 slot 个槽位的选中态。与 `_size_slot_label` **共用同一个 `_is_hat_eff()` 判据**，
 ##   保证「凹陷态」与「标签」永远指同一件事。
 func _size_slot_selected(slot: int) -> bool:
 	return MenuModel.slot_selected(slot, _is_hat_eff(), _sel_size, _sel_hatkind)
 
-## ★ 二级行的**唯一回调**：点第 slot 个槽位。落到哪个状态字段由 `MenuModel.slot_activation()`
-##   在**点击这一刻**判定 —— 这是「行语义随棋盘变、回调却没跟着变」那个 bug 的结构性修复。
-func _activate_size_slot(slot: int) -> void:
-	var a: Dictionary = MenuModel.slot_activation(slot, _is_hat_eff())
+## ★★ 2026-11-06：二级行的**唯一回调**，参数是**物理序号**（0/1/2 = 这一行从左到右第几块），
+##   **不是**槽位号。落地到哪个状态字段、写什么值，全在**点击这一刻**由当前含义查表得出。
+##   ⚠️⚠️ 为什么必须改成序号（这是 2026-09-19 那个 bug 的**第三次**，而且这次更隐蔽）：
+##     原先 bind 的是**建项时**的槽位号（彭罗斯下 = 3/1/2）。而这一行是"同一组物理瓷砖、
+##     两种含义"，页面只在 `_set_page()` 重建 —— 不重建地切到爱因斯坦时，
+##     `_activate_size_slot` 里的"现判含义"只决定**写哪个字段**，**改不了手里那个旧数字**
+##     ⇒ 点「帽子」实际执行的是 `_select_hatkind(3)`（3 不在种类表里）⇒ 一瓣都选不中。
+##     旧代码之所以看着没事：三档还是 0/1/2 时两张表同号，建项时的号与点击时的号恒等。
+##   ⇒ 口径统一成「身份 = 物理序号，值 = 序号查当前表」，标签 / 凹陷态 / 回调三者同源。
+func _activate_size_slot(idx: int) -> void:
+	var tbl: Array = MenuModel.slots(_is_hat_eff())
+	if idx < 0 or idx >= tbl.size():
+		return
+	var a: Dictionary = MenuModel.slot_activation(int(tbl[idx]), _is_hat_eff())
 	if a.has("hat_kind"):
 		_select_hatkind(int(a["hat_kind"]))
 	else:
 		_select_size(int(a["size"]))
 
-## 自检用：按**真实点击路径**激活二级行第 slot 个槽位 —— 定位到该项、过一遍
-## `_tile_at_point` 命中判定、再调它的 `cb`（与 `_input` 里 `(it["cb"] as Callable).call()`
-## 是同一条链）。返回 false = 这条链上有一步没过（通常是折叠没收完 → 被 `_board_t` 门槛挡下）。
+## 自检用：按**真实点击路径**激活二级行第 slot 个槽位（`slot` = 当前含义下的**槽位号**，
+## 例如 `GameConfig.STANDARD`）—— 定位到该项、过一遍 `_tile_at_point` 命中判定、再调它的 `cb`
+## （与 `_input` 里 `(it["cb"] as Callable).call()` 是同一条链）。
+## 返回 false = 这条链上有一步没过（通常是折叠没收完 → 被 `_board_t` 门槛挡下）。
+## ★ 匹配靠 `size_id`（运行期由 `_refresh_selection()` 从物理序号现算），调用 `cb` 不需要再传参：
+##   它自己按序号查表，与凹陷态/标签是同一个口径。
 func _click_boardsize_slot(slot: int) -> bool:
 	for i in _items.size():
 		var it: Dictionary = _items[i]
@@ -2018,7 +2036,7 @@ func _click_boardsize_slot(slot: int) -> bool:
 ## 「有效选中」的棋盘是不是爱因斯坦。二级行的含义要靠它判定，口径必须与凹陷态一致
 ##（切换动画期间用待切换的那个，否则整行已经切成「种类」、标签却还写着「随机/标准/加强」）。
 func _is_hat_eff() -> bool:
-	return _eff_board() == BOARD_HAT
+	return _sel_board == BOARD_HAT
 
 ## ★「大小」那一行的**行标题真源**（2026-10-09：该行从"棋盘行右侧的折叠二级菜单"
 ##   改成独立一行 ⇒ 必须有个标题，否则 帽子/海龟/幽灵 三个字看不出是什么）。
@@ -2034,7 +2052,7 @@ func _size_row_title() -> String:
 ## ★ 爱因斯坦不暴露尺寸档：无论 _sel_size 停在哪个槽位，一律按随机档开局，并把种类一起推过去
 ##   （种类换的是瓦片边长，直接决定盘面 → 和种子一样属于「盘面参数」，必须一起下发/落盘）。
 func _push_board_choice() -> void:
-	var ch := _eff_board_choice(false)
+	var ch := _eff_board_choice()
 	# 写 GameConfig 的三个字段走 MenuModel（**唯一**写这里的地方，手机菜单同一入口）
 	MenuModel.apply_choice_to_config(ch)
 	# ★ 联机开关与通道也在这里落 —— 本函数是**所有开局路径的唯一必经点**，所以两边必须同源：
@@ -2082,17 +2100,20 @@ func _push_board_choice() -> void:
 		#      只是两者的来源改了 —— `mode` 走 `_sel_mode_for_config()`（疾风折叠成 VS_AI），
 		#      `xg` 由 `_sel_mode` 派生。**哨兵值 100 仍然不外泄进文件**（旧版本 Godot 读它
 		#      会落进 `game.gd::_ready` 的夹取里变成一个非法 mode）。
+		# ★ 2026-11-06：`rand_shape` 是**新增**参数（插在 `path` 之前）——
+		#   不传的话路径会落到 `rand_shape: int` 上 ⇒ Parse Error（`xg` 那次踩过两回）。
 		GameConfig.save_last_match(_sel_board, _sel_size, _sel_hatkind, DIFF_HARD,
-			_sel_mode_for_config(), _sel_kind_code())
+			_sel_mode_for_config(), _sel_kind_code(), 1 if _sel_board_random else 0)
 
-## 预览与开局**共用的**「有效选择」三元组：`{board, size, hat_kind}`。
-## ★ 这是「爱因斯坦一律走随机档」这条规则的**唯一落点**：`_push_board_choice()` 与右下角的
-##   预览卡都从这里取，两处结构上不可能分叉 —— 分头各写一遍就会出现
-##   「预览画的是标准盘、点开始却是随机盘」这种鬼状态（本项目在完全同型的地方踩过）。
-## `use_pending=true` 时取「待切换」的那个棋盘（`_eff_board()`），让预览在切换动画一开始就跟手。
-func _eff_board_choice(use_pending: bool = true) -> Dictionary:
-	return MenuModel.effective_choice(_eff_board() if use_pending else _sel_board,
-		_sel_size, _sel_hatkind)
+## 预览与开局**共用的**「有效选择」四元组：`{board, size, hat_kind, random}`。
+## ★ 这是这条规则的**唯一落点**：`_push_board_choice()` 与右下角的预览卡都从这里取，
+##   两处结构上不可能分叉 —— 分头各写一遍就会出现「预览画的是标准盘、点开始却是随机盘」
+##   这种鬼状态（本项目在完全同型的地方踩过）。
+## ★★ 2026-11-06：删掉 `use_pending` 参数 —— 棋盘行改下拉之后**不存在"待切换"状态**了
+##   （那个参数只服务瓷砖的收回/滑行动画）。
+##   同时多了第四根轴 `random`（棋盘「XX随机」= 形状随机，格数照档）。
+func _eff_board_choice() -> Dictionary:
+	return MenuModel.effective_choice(_sel_board, _sel_size, _sel_hatkind, _sel_board_random)
 
 ## 把一份「上一局选项」记录应用到菜单的选择状态。返回是否采纳。
 ##
@@ -2112,7 +2133,8 @@ func _apply_last_match(d: Dictionary) -> bool:
 	var s: Dictionary = MenuModel.restore_state(d)
 	if s.is_empty():
 		return false
-	_sel_board = int(s["board"])
+	# ★ 2026-11-06：随机形状位与盘型**同一次写**（两者是同一个下拉选项的两半）
+	_select_board_pair(int(s["board"]), bool(s.get("random", false)))
 	_sel_size = int(s["size"])
 	_sel_hatkind = int(s["hat_kind"])
 	# ⚰️ 2026-10-12：这里原有 `_sel_diff = int(s["diff"])` —— 难度不再可选 ⇒ 菜单里没有这个
@@ -2167,43 +2189,214 @@ func _restore_last_match() -> void:
 	print("[菜单] 已恢复上一局选项：棋盘=%s 大小档=%d 帽子种类=%d 对战方式=%s（磐石恒最难）" % [
 		_board_label(_sel_board), _sel_size, _sel_hatkind, _mode_label(_sel_mode)])
 
-## 选棋盘类型。序列旋钮还是在**更新选择状态**，真正的位置变化分三步交给 _process 串起来：
-##   ① 收回当前的大小折叠菜单（_board_target=0，与「对战方式」同一套缓动）；
-##   ② 收回完成 → 换锚点，并把循环行的目标槽位设为「离当前位置最近的那个 ≡ 新选中项」；
-##   ③ 整行滑到位后才重新展开大小菜单 —— 顺序反了的话，折叠簇会跟着整行一起飞出去再回来。
+## 选棋盘（下拉 `item_selected` 的唯一落点）。参数是**选项下标**（`MenuModel.BOARD_KINDS`）。
+## ★★ 2026-11-06：棋盘行从"一排瓷砖"改成**下拉列表**（用户口令「选项太多了，就改成下拉列表选择」）
+##   ⇒ 切换不再需要"收回 → 整行滑行 → 展开"三段动画（那套只为让一排瓷砖整体平移），
+##   现在只剩三件事：写状态、重绘选中态、换背景密铺。
+func _select_board_option(index: int) -> void:
+	var o: Dictionary = MenuModel.board_option_at(index)
+	_select_board_pair(int(o["board"]), bool(o["random"]))
+
+## 写「盘型 + 随机位」这一对状态 —— **唯一写点**（铁律 8）。
+## ★ 随机位在这里就被 `MenuModel.board_has_random()` 夹好：筝形 / 爱因斯坦没有随机版，
+##   任何来源传来 `true` 都会被吃掉（筝形没有生成器分支，爱因斯坦那项已下线）。
+func _select_board_pair(id: int, random: bool) -> void:
+	var b: int = id if id >= 0 else BOARD_PENROSE
+	var rs: bool = random and MenuModel.board_has_random(b)
+	if b == _sel_board and rs == _sel_board_random:
+		return
+	_sel_board = b
+	_sel_board_random = rs
+	_refresh_selection()
+	_set_board_opt_selected()
+	# ★★ 2026-11-07：换盘可能让「大小/种类」那一行的**语义翻**（爱因斯坦 ↔ 其它）
+	#   ⇒ 项必须**重建**（标签与值一起换）。这就是 2026-09-19 / 11-06 那两个 bug 的现场，
+	#   现在由"重建项"结构性解决，不再靠"派生值现算"的补丁。
+	_rebuild_size_opt_items()
+	_sync_menu_bg()
+
+## 兼容旧调用点（自检 / 联机 / 恢复上一局都还按"只给盘型"调）：随机位保持不变。
 func _select_board(id: int) -> void:
-	if id == _sel_board and _board_pending < 0:
+	_select_board_pair(id, _sel_board_random)
+
+## 把下拉的选中项同步到状态。**不触发** `item_selected`（`select()` 不发信号）
+## ⇒ 不会在那里绕回 `_select_board_option()`（否则状态写入与被写入就成环了）。
+func _set_board_opt_selected() -> void:
+	if _board_opt == null or not is_instance_valid(_board_opt):
 		return
-	if id == _sel_board:
-		_board_pending = -1                          # 收回途中又点回原项 → 取消切换，原地重新展开
-	else:
-		_board_pending = id
-	_board_target = 0.0
-	_refresh_selection()   # 凹陷态立即跟到新块（选中标记取 _eff_board），不等收回动画
+	var idx: int = MenuModel.board_option_index(_sel_board, _sel_board_random)
+	if _board_opt.selected != idx:
+		_board_opt.select(idx)
 
-## 把待切换的棋盘类型立即落定（开始对局时用；页面重建走 _set_page 里的同款内联处理）
-func _commit_board_pending() -> void:
-	if _board_pending < 0:
-		return
-	_sel_board = _board_pending
-	_board_pending = -1
-	_layout_setup()
-	_board_target = 1.0
-
-## 「有效选中」的棋盘：切换动画期间（_board_pending >= 0）返回待切换的那个，否则就是 _sel_board。
-## 只有**选中标记（凹陷态）**用它；折叠锚点/布局必须用 _sel_board，否则二级菜单会在收回途中瞬移。
-func _eff_board() -> int:
-	return _board_pending if _board_pending >= 0 else _sel_board
-
-## 棋盘类型 → 瓷砖文字。★ 委托 `MenuModel.board_label()`（手机菜单同一份）
+## 棋盘类型 → 基准瓷砖文字（不带「随机」后缀）。★ 委托 `MenuModel.board_label()`
 func _board_label(id: int) -> String:
 	return MenuModel.board_label(id)
 
-## 循环行只铺**启用**的棋盘。★ 委托 `MenuModel.enabled_board_kinds()`
-func _board_enabled_kinds() -> Array:
-	return MenuModel.enabled_board_kinds()
+## 当前选项的显示名（带「随机」后缀）—— 页首摘要 / 日志用。
+func _board_opt_label() -> String:
+	return MenuModel.board_option_label(_sel_board, _sel_board_random)
 
+## ====== 主菜单的三个下拉（棋盘 / 大小·种类 / 对战方式）======
+## ★★ 2026-11-07 一并改造：用户口令「下拉选项风格还不一致，而且下拉里面也没有用主题色…
+##   干脆把练习菜单的对战方式和棋盘大小也改成下拉菜单」。
+##   三个下拉**共用**下面四个入口（建 / 摆 / 清 / 套样式）—— 各写一份就会出现"某一个不一致"，
+##   而这正是本轮要修的病根之一。
 
+## 下拉的**统一样式入口**（本体 + 弹出列表）。任何新下拉都必须走它。
+## ★ 本体的样式走 `_style_page_button()`（同时登记进 `_page_btns` ⇒ 换主题会重套本体）；
+##   **弹出列表是另一个节点**（`PopupMenu`），必须单独套（`GameConfig.style_option_popup()`），
+##   而且在 `_restyle_page_buttons()` 里还要再套一次（换主题后列表不能留旧色）。
+func _style_menu_opt(opt: OptionButton, fs: int = 20, breathe: bool = true) -> void:
+	# `fit_to_longest_item` 默认 true ⇒ 最小宽由**最长选项**决定，会把固定宽顶掉（横向错位）。
+	# 设置页那对下拉为同一个坑返工过；`clip_text` 保证超长也不裁出边界。
+	opt.fit_to_longest_item = false
+	opt.clip_text = true
+	opt.focus_mode = Control.FOCUS_NONE
+	opt.add_theme_font_size_override("font_size", fs)
+	_style_page_button(opt)                 # 本体（登记进 _page_btns ⇒ 换主题会重套）
+	# ★★ 2026-11-07（用户口令「给这三个下拉列表也加上按钮同款效果，立体，边缘呼吸」）：
+	#   按钮族是 1px 均匀描边 + 平底色，而主菜单其它可点的东西（底栏四块 /「开始」）都是瓷砖
+	#   —— 面 + 受光斜面 + 3px 描边 + 呼吸发光。并列时一眼两套语言 ⇒ 这里换成**立体盒**
+	#   （底边加厚 + 下投影 = 浮起；按下收壁收影）并**保存盒实例**供逐帧呼吸（`_pulse_menu_opts()`）。
+	var boxes: Dictionary = GameConfig.style_option_button(opt, _page_surface())
+	# ★★ 2026-11-07：「设置页的下拉菜单不需要动效」⇒ 静态立体盒照给，**不进呼吸表**。
+	#   meta 是"这个控件要不要呼吸"的唯一真源：`_restyle_page_buttons()` 换主题重造盒时
+	#   也读它，不会把设置页下拉偷偷加回去（只在建页时判断一次 = 换主题后动效复活）。
+	opt.set_meta(OPT_META_NO_BREATH, not breathe)
+	if breathe and not boxes.is_empty():
+		_opt_breath[opt] = boxes
+	else:
+		_opt_breath.erase(opt)
+	GameConfig.style_option_popup(opt, _page_surface())
+
+## 逐帧呼吸：与瓷砖**同一条相位**（`_breath_t` / `BREATH_PERIOD`），只改已保存的盒。
+## ★ 相位只有 `_process` 里那一个推进点（守卫 S53 钉的纪律：散到绘制侧会变成"帧率越高动得越快"）。
+## ★ 每帧必须清掉已释放的下拉（切页 `_clear_menu_opts()` 会 queue_free 它们）——
+##   不过滤会在控制台刷 "previously freed instance" 且呼吸静默停止。
+func _pulse_menu_opts() -> void:
+	if _opt_breath.is_empty():
+		return
+	var pulse: float = 0.5 + 0.5 * sin(_breath_t * TAU / BREATH_PERIOD)
+	for o in _opt_breath.keys():
+		if o == null or not is_instance_valid(o):
+			_opt_breath.erase(o)
+			continue
+		GameConfig.pulse_option_button(_opt_breath[o], pulse)
+		# ★ 显式重绘：不依赖"StyleBox 资源变更会通知宿主控件"这条隐式链 ——
+		#   三个控件一次重绘，代价可以忽略，但漏掉的症状是**呼吸静止不动**（静默、且截图看不出来）。
+		(o as Control).queue_redraw()
+
+## 把下拉摆进它那一行带：横向居中，纵向与瓷砖行同一个口径（`cy` = 块心 y）。
+## ★ 宽度按视口取（220~420）；高度随行带自适应并夹在 [36,56] —— 行很矮时别把行压穿。
+func _place_menu_opt(opt: OptionButton, cy: float, band_h: float) -> void:
+	if opt == null or not is_instance_valid(opt):
+		return
+	var w: float = clampf(size.x * 0.34, 220.0, 420.0)
+	var h: float = clampf(band_h * 0.34, 36.0, 56.0)
+	opt.size = Vector2(w, h)
+	opt.position = Vector2((size.x - w) * 0.5, cy - h * 0.5)
+
+## 行 group → 该行的下拉（没有下拉的行返回 null）。布局与判据都读这一张映射。
+func _menu_opt_of(g: String) -> OptionButton:
+	match g:
+		"board": return _board_opt
+		"boardsize": return _size_opt
+		"mode": return _mode_opt
+	return null
+
+func _clear_menu_opts() -> void:
+	_opt_breath.clear()          # 盒的宿主即将被释放 ⇒ 呼吸表必须同步清空（见 `_pulse_menu_opts()`）
+	for o in [_board_opt, _size_opt, _mode_opt]:
+		if o != null and is_instance_valid(o):
+			o.queue_free()
+	_board_opt = null
+	_size_opt = null
+	_mode_opt = null
+
+# ---------------- ① 棋盘（8 项：3 盘 × 固定/随机 + 筝形 + 爱因斯坦） ----------------
+func _build_board_opt() -> void:
+	var opt := OptionButton.new()
+	opt.name = "BoardOpt"
+	_style_menu_opt(opt)
+	for k in MenuModel.board_options():
+		opt.add_item(str(k["label"]))
+	opt.item_selected.connect(_on_board_opt_selected)
+	add_child(opt)
+	_board_opt = opt
+	_set_board_opt_selected()
+
+## 下拉回调：走 `_select_board_option()`（唯一落点）。
+func _on_board_opt_selected(index: int) -> void:
+	_select_board_option(index)
+
+# ---------------- ② 大小 / 种类（语义随棋盘翻，项**重建**） ----------------
+func _build_size_opt() -> void:
+	var opt := OptionButton.new()
+	opt.name = "SizeOpt"
+	_style_menu_opt(opt)
+	opt.item_selected.connect(_on_size_opt_selected)
+	add_child(opt)
+	_size_opt = opt
+	_rebuild_size_opt_items()
+
+## 重建项（语义翻的时候必须调：爱因斯坦 = 帽子/海龟/幽灵，其余 = 9×9/13×13/19×19）。
+## ★ 项文本与项值**从同一个数组产出**（`MenuModel.slots()`）⇒ 不存在"标签换了值没换"。
+## ★ 切棋盘走的就是这条（`_select_board_pair()`）—— 页面**不重建**，所以这里必须自己重算。
+func _rebuild_size_opt_items() -> void:
+	if _size_opt == null or not is_instance_valid(_size_opt):
+		return
+	_size_opt.clear()
+	for v in MenuModel.slots(_is_hat_eff()):
+		_size_opt.add_item(MenuModel.slot_label(int(v), _is_hat_eff(), _sel_board))
+	_set_size_opt_selected()
+
+func _set_size_opt_selected() -> void:
+	if _size_opt == null or not is_instance_valid(_size_opt):
+		return
+	var tbl: Array = MenuModel.slots(_is_hat_eff())
+	var cur: int = _sel_hatkind if _is_hat_eff() else _sel_size
+	var idx: int = tbl.find(cur)
+	if idx < 0:
+		idx = 0
+	if _size_opt.selected != idx:
+		_size_opt.select(idx)
+
+func _on_size_opt_selected(index: int) -> void:
+	var tbl: Array = MenuModel.slots(_is_hat_eff())
+	if index < 0 or index >= tbl.size():
+		return
+	if _is_hat_eff():
+		_select_hatkind(int(tbl[index]))
+	else:
+		_select_size(int(tbl[index]))
+
+# ---------------- ③ 对战方式（5 档） ----------------
+## 下拉项的顺序 = 值数组的顺序（**取值的唯一真源**）。
+func _mode_opt_values() -> Array:
+	return [MODE_LOCAL, MODE_VS_AI, MODE_XGAI, MODE_LIUSHUI, MODE_YEMA]
+
+func _build_mode_opt() -> void:
+	var opt := OptionButton.new()
+	opt.name = "ModeOpt"
+	_style_menu_opt(opt)
+	for m in _mode_opt_values():
+		opt.add_item(_mode_label(int(m)))
+	opt.item_selected.connect(_on_mode_opt_selected)
+	add_child(opt)
+	_mode_opt = opt
+	_set_mode_opt_selected()
+
+func _set_mode_opt_selected() -> void:
+	if _mode_opt == null or not is_instance_valid(_mode_opt):
+		return
+	var idx: int = _mode_opt_values().find(_sel_mode)
+	if idx >= 0 and _mode_opt.selected != idx:
+		_mode_opt.select(idx)
+
+func _on_mode_opt_selected(index: int) -> void:
+	var vals: Array = _mode_opt_values()
+	if index >= 0 and index < vals.size():
+		_select_mode(int(vals[index]))
 
 # 选方式：必须重建本页——线上模式要增出「联机方式」行(netmode 瓷砖)，
 # 其余模式要把该行移除。★ 2026-10-09：原先这里还写着「难度块展开/收回由 _diff_target
@@ -2216,6 +2409,8 @@ func _board_enabled_kinds() -> Array:
 ##   现在「疾风」就是 `_sel_mode` 的一个取值，三块互为**并列互斥**项，语义上不可能同时亮。
 ##   ⚠️ 那句"`id == _sel_mode: return`"的**早退**不是省事，是**有语义**的：它挡掉"重复点同一块"
 ##     时的整页重建 + 折叠动画重启（点自己时重建会让整行滑回起点、闪一下）。别顺手删。
+
+
 func _select_mode(id: int) -> void:
 	if id == _sel_mode:
 		return
@@ -2225,7 +2420,11 @@ func _select_mode(id: int) -> void:
 	#   停在 NET_RANDOM 又没在匹配中时，再点它会被 `if id == _sel_netmode: return` 静默拦掉，
 	#   用户连重试的入口都没有。随机匹配删除后这个状态不存在了，
 	#   `_reset_netmode_to_invite()` 与守它整条状态机的 `--netmodetest` 一起删除。
-	_set_page(PAGE_MAIN)
+	# ★★ 2026-11-07：原先这里 `_set_page(PAGE_MAIN)` 整页重建 —— 那是"选线上要长出联机方式
+	#   两瓣"时代的做法。如今对战方式只是一行下拉，没有任何行会增删 ⇒ 重建既浪费又危险
+	#   （正在处理 `item_selected` 信号时就地销毁那个下拉）。改为只同步选中态 + 重绘。
+	_set_mode_opt_selected()
+	queue_redraw()
 
 ## 对战方式常量 → 标签（**单一真源**，与 `_netmode_label()` 同一口径）。
 ##
@@ -2235,6 +2434,8 @@ func _select_mode(id: int) -> void:
 ##   `--menutest` ⑭ 的样本都**按 label 字面**认瓷砖，写歪一处只会"找不到那块瓷砖"（静默）。
 ##   `MODE_XGAI` 的名字只能在这里给 —— 它是菜单内部哨兵，`MenuModel`（手机/棋谱共用）
 ##   不该知道它的存在，所以本函数**委托**给 `MenuModel.mode_label()` 拿另两档的名字。
+
+
 func _mode_label(id: int) -> String:
 	if id == MODE_XGAI:
 		return "疾风"
@@ -2248,6 +2449,8 @@ func _mode_label(id: int) -> String:
 ## 联机方式常量 → 标签（**单一真源**）。描述符的 `label` 与 `_refresh_selection()` 的
 ## 选中态判定都从这里取 —— 免得"加了一瓣、忘了改 `_refresh_selection` 里的硬编码"
 ## ⇒ 那一瓣永远选不中（黑子标记不出现 = 点了没反应，而且**静默**）。
+
+
 func _netmode_label(id: int) -> String:
 	match id:
 		NET_LOBBY: return "公开大厅"
@@ -2263,6 +2466,8 @@ func _netmode_label(id: int) -> String:
 ##   ③ 选公开大厅 ⇒ 顺手刷列表。
 ## ★ 同档连点早退（防连点抖列表）：它的**视觉后果**由 `_on_duel_tab_pressed()` 末尾那句
 ##   "无条件重派生"兜住（toggle 按钮会自己翻面，见那里的注释）。
+
+
 func _select_netmode(id: int) -> void:
 	if id == _sel_netmode:
 		return
@@ -2297,6 +2502,8 @@ func _select_netmode(id: int) -> void:
 ## ★ 判据：`--steamuitest` ⑪/⑪b/⑪c（降级闸 / 阳性对照 / 真实入口不翻档）
 ##   ＋ ⑫a/⑫b（**从控件出发**找到真切换块、真按一下 ⇒ 档位与按下态跟着变）
 ##   ＋ `--labeltest` 的对弈页布局四档视口扫描（页内控件不越界 / 不压底栏）。
+
+
 func _refresh_duel_tabs() -> void:
 	var lobby: bool = _sel_netmode == NET_LOBBY
 	for id in _duel_tabs.keys():
@@ -2334,41 +2541,34 @@ func _refresh_duel_tabs() -> void:
 ##   而「进大厅前先确认自己登录了」也是这条最便宜的自检。
 ## ★ 拿不到昵称时**明说**「未连接 Steam」而不是留空：留空会被读成「我的昵称是空的」，
 ##   而实际是「Steam 没起来」（同族的「量具说谎」比不显示更坏）。
+
+
 func _refresh_duel_header() -> void:
 	if _duel_me == null or not is_instance_valid(_duel_me):
 		return
 	var nm: String = SteamNet.my_persona()
-	# ★ 2026-10-21 补「本局棋盘」（用户问「邀请好友在哪里选择棋盘呢？」）：
-	#   本页是联机**唯一入口**，而盘的真源在**主菜单的棋盘行**（`_sel_board` / `_sel_size` /
-	#   `_sel_hatkind` → `_eff_board_choice()`）。不写这一格，房主进局前不知道自己将开哪张盘，
-	#   加入方更会以为"我在菜单选的盘算数" —— 实际联机的盘由房主定
-	#   （`game.gd::_send_init()` 把整张盘：顶点/瓷砖/邻接/盘型标记/种子 整套下发，
-	#     `_apply_snapshot()` 直接套用）。⇒ 一格文字消掉一整类"是不是选错了"的疑惑。
-	_duel_me.text = "我：%s ｜ 联机战绩 %s ｜ 本局棋盘：%s（联机以房主所选为准）" % [
-			nm if nm != "" else "未连接 Steam", GameConfig.record_str(), _duel_board_summary()]
+	# ★★ 2026-11-04 改口（用户口令「虽然现在是选择棋盘制，但对弈菜单还能选棋盘，好好设计一下」）：
+	#   本页**不再报盘名** —— 棋盘与格数都在**对局内**定（房主定格数档 → 双方各选一张 →
+	#   随机抽一张），页面上的盘名已经和实际开的盘对不上了（"量具说谎"比不显示更坏）。
+	#   ⇒ 这行改成**规则说明**，而且它必须**恒定**：由 `--steamuitest` ⑬ 双向钉住
+	#     （既查文案含「各选一张」「随机抽」，也查换盘之后不许改口）。
+	_duel_me.text = "我：%s ｜ 联机战绩 %s ｜ 棋盘与格数进入对局后各选一张、随机抽" % [
+			nm if nm != "" else "未连接 Steam", GameConfig.record_str()]
 
+# ⚰️ 2026-11-04 墓碑（名字不许回收）：这里原有 `_duel_board_summary()` —— 把主菜单那三个
+#   `_sel_*` 拼成"盘名·大小"给页首显示。棋盘改成「对局内各选一张、随机抽」之后，
+#   本页显示的盘名与真正开的盘已经不是同一件事 ⇒ 函数与它的调用点一起删除。
+#   ★ 删的是**显示**，不是状态：主菜单的 `_sel_board` / `_sel_size` 仍是对局内选盘的初值。
 
-## 本局将用哪张盘的可读摘要（盘名·大小；爱因斯坦是 盘名·种类）。
-## ★ **只读**：真源仍是 `_eff_board_choice()`（主菜单那三个 `_sel_*`），这里不另存状态，
-##   也不自己判"爱因斯坦没有大小档"那条规则 —— 大小一律走 `MenuModel.size_row_value()`。
-func _duel_board_summary() -> String:
-	var ch: Dictionary = _eff_board_choice(false)
-	var bid: int = int(ch.get("board", GameConfig.BOARD_PENROSE))
-	var sz: int = int(ch.get("size", GameConfig.STANDARD))
-	var nm: String = MenuModel.board_label(bid)
-	if MenuModel.is_hat_board(bid):
-		nm += "·" + MenuModel.hat_kind_label(int(ch.get("hat_kind", GameConfig.HAT_HAT)))
-	return "%s·%s" % [nm, MenuModel.size_row_value(bid, sz)]
-
-# ====== 对弈页的本局设置：棋盘 / 大小 / 座位（2026-10-21）======
+# ====== 对弈页的本局设置：座位（2026-10-21；★ 2026-11-04 起只剩座位）======
 ## 座位下拉的显示名。★★ **顺序就是** `GameConfig.SEAT_BLACK/WHITE/RANDOM` 的数值（0/1/2）：
 ##   "索引即常量"在这里是契约 —— 顺序一改，选「我执白」就会真的发黑，而且**不报错**。
 ##   由 `--steamuitest` ⑭ 双向钉住（既查这张表的内容，也查它写进 GameConfig 的值）。
 const SEAT_PICK_LABELS: Array[String] = ["我执黑", "我执白", "随机"]
 
-## 一行「标签 + 下拉」。三个选择器共用这一处建法（否则是三份几乎一样的 8 行）。
+## 一行「标签 + 下拉」（本页**只剩座位**这一个选择器，2026-11-04 起）。
 ## ★ `_style_page_button()` 会把它登记进 `_page_btns`（主题切换时 `_restyle_page_buttons()`
-##   会一起重套盒子）—— OptionButton 是 Button 的子类，走同一套主题没错。
+##   会一起重套盒子 + 弹出列表）—— OptionButton 是 Button 的子类，走同一套主题没错。
 func _duel_make_pick_row(parent: VBoxContainer, label_text: String, items: Array,
 		cb: Callable) -> OptionButton:
 	var row := HBoxContainer.new()
@@ -2384,78 +2584,29 @@ func _duel_make_pick_row(parent: VBoxContainer, label_text: String, items: Array
 	opt.focus_mode = Control.FOCUS_NONE
 	for it in items:
 		opt.add_item(str(it))
-	_style_page_button(opt)
+	# ★ 2026-11-07：与主菜单三个下拉共用**同一套**样式入口（登记 / 立体 / 呼吸 / popup）。
+	#   原来只 `_style_page_button()`：登记了，但既没立体盒也没套弹出列表 ⇒ 同一页里两种下拉语言。
+	_style_menu_opt(opt, 18)
 	opt.item_selected.connect(cb)
 	row.add_child(opt)
 	return opt
 
-## 棋盘下拉的项 = **当前启用的全部棋盘**。
-## ★ 真源 `MenuModel.enabled_board_kinds()`：占位的「敬请期待」**不进**列表 ——
-##   放进去玩家点了也开不了局（而且 `enabled=false` 那本来就是"没实现"的占位）。
-func _duel_board_pick_labels() -> Array:
-	var out: Array = []
-	for k in MenuModel.enabled_board_kinds():
-		out.append(str(k["label"]))
-	return out
+# ⚰️ 2026-11-04 墓碑（名字不许回收）：这里原有 `_duel_board_pick_labels()` 与
+#   `_duel_size_pick_labels()` —— 给本页那两个"棋盘 / 大小"下拉铺项。棋盘与格数改到
+#   **对局内**定之后，两个下拉是死旋钮 ⇒ 函数、调用点、`_duel_board_opt` / `_duel_size_opt`
+#   两个成员一起删除。★ 判据换成"控件树里恰好 1 个 OptionButton"（`--steamuitest` ⑭），
+#   谁把它们加回来当场红。
 
-## 大小下拉的项 = 三档（随机 / 标准 / 加强）。
-## ★ 爱因斯坦盘**禁用**这个下拉（它的大小由种类决定，见 `MenuModel.effective_choice()`），
-##   而不是把项换成"由棋盘决定"—— 换项会让 `select()` 的索引语义跟着变，
-##   三档索引与 `MenuModel.slots()` 的对应关系就断了（本工程最忌讳的"索引换个含义"）。
-func _duel_size_pick_labels() -> Array:
-	var out: Array = []
-	var bid: int = int(_eff_board_choice(false).get("board", GameConfig.BOARD_PENROSE))
-	for slot in MenuModel.slots():
-		out.append(MenuModel.size_label(int(slot), bid))
-	return out
-
-## 三个下拉的选中项 / 可用状态 —— **唯一派生点**（建页、每次改选、切档都走它）。
-## ★ 全部从真源现读，不缓存：`_sel_board` / `_sel_size` / `GameConfig.seat_choice`
-##   才是状态，下拉只是它们的显示器（铁律 7 的"派生"那一半）。
+## 座位下拉的选中项 —— **唯一派生点**（建页、每次改选、切档都走它）。
+## ★ 从真源现读，不缓存：`GameConfig.seat_choice` 才是状态，下拉只是它的显示器（铁律 7）。
 func _refresh_duel_picks() -> void:
-	var ch: Dictionary = _eff_board_choice(false)
-	var bid: int = int(ch.get("board", GameConfig.BOARD_PENROSE))
-	var sz: int = int(ch.get("size", GameConfig.STANDARD))
-	var hat: bool = MenuModel.is_hat_board(bid)
-	if _duel_board_opt != null and is_instance_valid(_duel_board_opt):
-		var kinds: Array = MenuModel.enabled_board_kinds()
-		for i in kinds.size():
-			if int(kinds[i]["id"]) == bid:
-				_duel_board_opt.select(i)
-				break
-	if _duel_size_opt != null and is_instance_valid(_duel_size_opt):
-		_duel_size_opt.disabled = hat
-		_duel_size_opt.tooltip_text = "爱因斯坦盘的大小由种类决定（帽子 / 海龟 / 幽灵 各一套）" if hat else ""
-		var slots: Array = MenuModel.slots()
-		for i in slots.size():
-			if int(slots[i]) == sz:
-				_duel_size_opt.select(i)
-				break
 	if _duel_seat_opt != null and is_instance_valid(_duel_seat_opt):
 		_duel_seat_opt.select(clampi(int(GameConfig.seat_choice), 0, SEAT_PICK_LABELS.size() - 1))
 
-## 下拉 → 真源。棋盘 / 大小走主菜单那两条**唯一入口**，座位写 `GameConfig.seat_choice`。
-## ⚠️ `_select_board()` 只置"待切换"（`_board_pending`），落定必须 `_commit_board_pending()`
-##    —— 少这一句就是"下拉显示雪花、`_sel_board` 还是彭罗斯"，而且没有任何报错。
-func _on_duel_board_pick(idx: int) -> void:
-	var kinds: Array = MenuModel.enabled_board_kinds()
-	if idx < 0 or idx >= kinds.size():
-		return
-	_select_board(int(kinds[idx]["id"]))
-	_commit_board_pending()
-	_refresh_duel_picks()
-	_refresh_duel_header()
-
-func _on_duel_size_pick(idx: int) -> void:
-	var slots: Array = MenuModel.slots()
-	if idx < 0 or idx >= slots.size():
-		return
-	_select_size(int(slots[idx]))
-	_refresh_duel_picks()
-	_refresh_duel_header()
-
 ## 座位下拉（**房主视角**）：加入方选它没有意义 —— 它的颜色由房主经 `init` 消息下发
 ## （`game.gd::_send_init()` 的 `net_color`）。这一栏存在是为了让房主建房前能换边。
+
+
 func _on_duel_seat_pick(idx: int) -> void:
 	GameConfig.seat_choice = clampi(idx, GameConfig.SEAT_BLACK, GameConfig.SEAT_RANDOM)
 	_refresh_duel_picks()
@@ -2464,6 +2615,8 @@ func _on_duel_seat_pick(idx: int) -> void:
 ## 页内容的可用下沿（**唯一真源**：底栏行带上沿 − 净空）。
 ## ★ 与设置页 / 棋谱页同一口径（读 `_footer_band()`），别再写 `size.y - 常数`：
 ##   底栏高度是布局意图常量，内容必须**让位给它**，而「让多少」只能有一处说了算。
+
+
 func _duel_panel_bottom() -> float:
 	return _footer_band().position.y - FOOT_GAP
 
@@ -2472,6 +2625,8 @@ func _duel_panel_bottom() -> float:
 ##   把环境判断塞进建页里，自检与无 Steam 的机器就都看不到页面
 ##   （旧实现把闸放在 `_open_lobby_panel()` 而不是 `_build_lobby_panel()`，同一条纪律；
 ##    现在由 `_select_netmode()` 与 `_refresh_lobby_list()` 两道闸守）。
+
+
 func _build_duel_ui() -> void:
 	_clear_duel_ui()
 	var duel_bottom: float = _duel_panel_bottom()
@@ -2520,23 +2675,17 @@ func _build_duel_ui() -> void:
 	_duel_invite_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_duel_invite_box.add_theme_constant_override("separation", 10)
 	root.add_child(_duel_invite_box)
-	# ── 本局设置：棋盘 / 大小 / 座位（2026-10-21 用户口令「联机页面加入棋盘选择下拉列表，
-	#    把当前全部棋盘都放进去，还要能选择座位（黑白棋）」）────────────────────────
-	# ★★ 这三个下拉**不另存状态**：棋盘写 `_sel_board`、大小写 `_sel_size`（都走主菜单那两条
-	#   唯一入口 `_select_board()` / `_select_size()`），座位写 `GameConfig.seat_choice`。
-	#   为什么必须同源：主菜单那排瓷砖也是同一份状态 —— 各存一份就会出现
-	#   「下拉说雪花、瓷砖高亮彭罗斯、开局用的是第三个」（本工程在完全同型的地方踩过好几次）。
-	# ★ 用的都是**真入口**：`_select_board()` 只置"待切换"，落定还要 `_commit_board_pending()`
-	#   —— 少这一句的话下拉看着变了、实际 `_sel_board` 没动（静默）。
+	# ── 本局设置：**只剩座位**（2026-10-21 用户口令「联机页面…还要能选择座位（黑白棋）」；
+	#    ★ 2026-11-04 用户口令「虽然现在是选择棋盘制，但对弈菜单还能选棋盘，好好设计一下」）
+	#    ⇒ 棋盘与格数挪到**对局内**定（房主定格数档 → 双方各选一张 → 随机抽一张），
+	#      本页那两个下拉成为死旋钮，连成员一起删除。判据见 `--steamuitest` ⑭
+	#      （从控件树数 OptionButton，数量必须恰好 1）。
+	# ★ 这一个下拉**不另存状态**：真源是 `GameConfig.seat_choice`，下拉只是显示器（铁律 7）。
 	var picks := VBoxContainer.new()
 	picks.name = "DuelPicks"
 	picks.add_theme_constant_override("separation", 8)
 	picks.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_duel_invite_box.add_child(picks)
-	_duel_board_opt = _duel_make_pick_row(picks, "棋盘", _duel_board_pick_labels(),
-			_on_duel_board_pick)
-	_duel_size_opt = _duel_make_pick_row(picks, "大小", _duel_size_pick_labels(),
-			_on_duel_size_pick)
 	_duel_seat_opt = _duel_make_pick_row(picks, "座位", SEAT_PICK_LABELS,
 			_on_duel_seat_pick)
 	# ★ 需求「一定要双方都准备好了再进入对局」在 UI 上必须**提前说清**：
@@ -2639,10 +2788,13 @@ func _build_duel_ui() -> void:
 ## ★ 清引用只有 `_forget_duel_refs()` 一处（铁律 8：清空点也是写点）——
 ##   本页成员已有 14 个，手写清空必然漏掉新增的那几个（旧实现踩过：留下指向已 `queue_free()`
 ##   节点的悬空引用，访问即报错，或更坏：报错被吞）。
+
+
 func _clear_duel_ui() -> void:
 	if _duel_root != null and is_instance_valid(_duel_root):
 		_duel_root.queue_free()
 	_forget_duel_refs()
+
 
 func _forget_duel_refs() -> void:
 	_duel_root = null
@@ -2659,8 +2811,6 @@ func _forget_duel_refs() -> void:
 	_lobby_status = null
 	_lobby_scroll = null
 	_lobby_list_box = null
-	_duel_board_opt = null
-	_duel_size_opt = null
 	_duel_seat_opt = null
 
 ## 切换块的回调：**点击时现判含义**（铁律 7）—— 「这一块指哪一档」由它绑定的 id 现判，
@@ -2669,12 +2819,16 @@ func _forget_duel_refs() -> void:
 ##   `toggle_mode` 的按钮**自己**会把 `button_pressed` 翻面 ⇒ 连点当前档时它会翻成「未按下」，
 ##   而 `_select_netmode()` 对同档早退（防连点抖面板）⇒ 不重派生就留下
 ##   「当前档的块看起来没被选中」的假象（「点了没反应」同一家）。
+
+
 func _on_duel_tab_pressed(id: int) -> void:
 	_select_netmode(id)
 	_refresh_duel_tabs()
 
 ## 两个切换块此刻的按下态（id → bool）。**给判据用的唯一读法** ——
 ## 判据不自己去 `_duel_tabs` 里翻字典（那是内部结构），也不另算一遍派生逻辑。
+
+
 func _duel_tab_state() -> Dictionary:
 	var out: Dictionary = {}
 	for id in _duel_tabs.keys():
@@ -2686,8 +2840,11 @@ func _duel_tab_state() -> Dictionary:
 ## ★★ 为什么必须从控件出发：读 `_duel_tabs` 是"自己人给自己人打分"—— 按钮没接上、
 ##   甚至没建出来，照样能读到按下态。而"按钮连错 / 没连"正是"点了没反应"那一族
 ##   （与棋谱面板 ⑫ 的工具栏接线同一条纪律，见 rules.md §13⑫）。
+
+
 func _duel_find_tab_button(id: int) -> Button:
 	return _duel_find_button(_duel_root, _netmode_label(id)) as Button
+
 
 func _duel_find_button(node: Node, text: String) -> Button:
 	if node == null or not is_instance_valid(node):
@@ -2700,6 +2857,7 @@ func _duel_find_button(node: Node, text: String) -> Button:
 			return hit
 	return null
 
+
 func _refresh_lobby_list() -> void:
 	_clear_lobby_list()
 	if _lobby_status:
@@ -2708,12 +2866,14 @@ func _refresh_lobby_list() -> void:
 		SteamNet.steam_lobby_list_received.connect(_on_lobby_list_received)
 	SteamNet.request_lobby_list()
 
+
 func _clear_lobby_list() -> void:
 	if _lobby_list_box == null:
 		return
 	for c in _lobby_list_box.get_children():
 		_lobby_list_box.remove_child(c)
 		c.queue_free()
+
 
 func _on_lobby_list_received(ids: Array) -> void:
 	_clear_lobby_list()
@@ -2739,6 +2899,8 @@ func _on_lobby_list_received(ids: Array) -> void:
 ##   这与 `_fit_online_panel_children()` 里「输入框吃余量、按钮固定」是同一条纪律。
 const LOBBY_JOIN_W: float = 64.0
 const LOBBY_ROW_MIN_W: float = 60.0
+
+
 func _make_lobby_row(lid: int) -> Control:
 	var nm := String(SteamNet.lobby_get_data(lid, SteamNet.LOBBY_NAME_KEY))
 	if nm == "":
@@ -2766,6 +2928,8 @@ func _make_lobby_row(lid: int) -> Control:
 ##   ⚠️ 但**排版部分共用** `_lobby_row_shell/_lobby_row_name/_lobby_row_record` ——
 ##   排版是生产关注点（长昵称顶出「加入」是用户看得见的 bug），不该各写一份：
 ##   两份排版各改一处 ⇒ 有一半概率"截图看着好、实机坏"（截图恰好是唯一目检件）。
+
+
 func _make_lobby_row_shot(nm: String, rec: String) -> Control:
 	var row := _lobby_row_shell()
 	_lobby_row_line1(row).add_child(_lobby_row_name(nm if nm != "" else "玩家"))
@@ -2782,6 +2946,9 @@ func _make_lobby_row_shot(nm: String, rec: String) -> Control:
 	return row
 
 ## 行的外壳：VBox（两行之间 4px）。
+
+
+## 行的外壳：VBox（两行之间 4px）。
 func _lobby_row_shell() -> VBoxContainer:
 	var row := VBoxContainer.new()
 	row.custom_minimum_size = Vector2(0, 58)
@@ -2793,8 +2960,11 @@ func _lobby_row_shell() -> VBoxContainer:
 
 ## 第一行容器（昵称 + 「加入」）。取 child(0) 而不是再存一个成员 ——
 ## 行是每次刷新重建的短命对象，存成员反而多一处"忘了清"的引用。
+
+
 func _lobby_row_line1(row: Node) -> HBoxContainer:
 	return row.get_child(0) as HBoxContainer
+
 
 func _lobby_row_name(nm: String) -> Label:
 	var name_lbl := Label.new()
@@ -2805,6 +2975,7 @@ func _lobby_row_name(nm: String) -> Label:
 	name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	name_lbl.add_theme_font_size_override("font_size", 16)
 	return name_lbl
+
 
 func _lobby_row_record(rec: String) -> Label:
 	var rec_lbl := Label.new()
@@ -2819,6 +2990,7 @@ func _lobby_row_record(rec: String) -> Label:
 	rec_lbl.add_theme_font_size_override("font_size", 16)
 	rec_lbl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
 	return rec_lbl
+
 
 func _join_lobby(lid: int) -> void:
 	# ★ 复用"输房间号加入"的唯一必经点（铁律 8：一处写一处读）。
@@ -2846,6 +3018,8 @@ func _join_lobby(lid: int) -> void:
 ##   否则截出来的图只证明"等宽字符串能排下"，证明不了长昵称/无战绩两档会不会撑破行宽。
 ## ★ 2026-10-08：本夹具跟着页走 —— 直接落到「对弈」页的大厅档（**不碰 Steam**：
 ##   旧版走 `_select_netmode()` 会被环境闸挡下、截出空图）。
+
+
 func _menu_shot_lobby() -> void:
 	await get_tree().process_frame
 	_sel_netmode = NET_LOBBY
@@ -2891,6 +3065,8 @@ func _menu_shot_lobby() -> void:
 ##   ★ 现在三块是并列项 ⇒ `_sel_mode` 是什么，就只有那**一块**亮，结构上不可能出现两块。
 ##   ★ ⑭ 的阴性对照因此补了一把**直接复现旧写法**的刀（"父子判定"刀）：把 MODE_XGAI 那一支
 ##     改回"依赖 `_sel_mode == MODE_VS_AI`"，⑭ 必须当场红 —— 那才是这条口令的回归牙齿。
+
+
 func _mode_tile_selected(mode_id: int) -> bool:
 	return _sel_mode == mode_id
 
@@ -2912,40 +3088,29 @@ func _mode_tile_selected(mode_id: int) -> bool:
 ## ★ `page_id` 是**身份字段**（与 `size_id` / `mode_id` 同款，**不许按 label 字面认**）：
 ##   底栏四个 label 是给人读的，将来改名（「棋谱」→「棋谱库」）不该影响选中态，
 ##   更不该"按名字匹配到别的块"—— 那正是本工程复现过三次的坏法（用内容当身份）。
+
+
 func _nav_tile_selected(page_id: int) -> bool:
 	return _page == page_id
 
 # 根据当前选择状态刷新各瓷砖的 selected 标记并重绘。
 # ★★ 2026-10-12：`selected` 现在是**唯一**的"已选"真源 —— 绘制侧按它决定"凸起 / 凹陷"
 #   （旧版还要把它同步进 `_stones` 去铺黑砖，那个第二份记账随黑砖族整族删除）。
+
+
 func _refresh_selection() -> void:
 	for i in _items.size():
 		var it: Dictionary = _items[i]
 		var now_sel := false
 		match it["group"]:
-			"board":
-				# 用「有效选中」而非 _sel_board：切换动画期间凹陷态立即跟到新块，
-				# 折叠锚点仍用 _sel_board（旧块），才能绕旧锚点收回。
-				now_sel = (it["label"] == _board_label(_eff_board()))
-			"boardsize":
-				# 标签与选中态都按 size_id（= 槽位号）走**同一份口径**（标签随棋盘类型变，不能按字面匹配）。
-				# ★ 三个槽位**一律**改写标签（原实现只改写槽位 0）—— 否则从爱因斯坦切回普通棋盘时，
-				#   槽位 1/2 会留着「海龟/幽灵」，就是用户说的「其他棋盘的标准/加强被改名了」。
-				#   回调不在这里：它是 `_activate_size_slot`（点击时现判含义），所以本处不必动它 ——
-				#   这也正是「语义与回调」不再可能分叉的原因。
-				var sid: int = int(it.get("size_id", -99))
-				it["label"] = _size_slot_label(sid)
-				now_sel = _size_slot_selected(sid)
-			"mode":
-				# ★★ 2026-10-09 修（`--menutest` ⑭ 逮到）：本臂**走身份字段**，不按 label 字面匹配。
-				#   原实现只认「人机 / 本地」两个 label，而难度三档平铺进本组之后 label 是
-				#   「简单/普通/困难」⇒ 点难度时三档全被判不高亮（AI 却真按该档在下）。
-				#   ⚠️ 建项处 `sel` 一直是对的 ⇒ 这条坏法**只在"运行期重新派生"这一路**上，
-				#   只看建项结果的判据一条也抓不到。现在两处同调 `_mode_tile_selected()`。
-				now_sel = _mode_tile_selected(int(it.get("mode_id", -1)))
-			# ⚰️ 这里原有 `"diff":` 一臂（难度三档的选中态）。难度档已并入 `mode` 组 ⇒ 那一臂
-			#   **永不命中**（恒假的闸 = 没闸，铁律 4）⇒ 并入上面那一臂。
-			#   ⚠️ 别再"另起一臂按 label 认"：那正是上面那条 bug 的复现方法。
+			# ⚰️ 2026-11-06/07 墓碑（名字不许回收）：这里原有 `"board"` / `"boardsize"` / `"mode"`
+			#   三条臂 —— 棋盘、大小、对战方式三行**都改成了原生下拉**，`_items` 里再没有
+			#   这三组的条目 ⇒ 三臂永不命中（恒假的闸 = 没闸）。
+			#   ★ 它们守过的那些 bug（"改标签不改值"、"身份按 label 认"）现在结构性不存在：
+			#     下拉的项是**重建**出来的，文本与值同源。
+			#   ⚠️ 但"运行期重新派生"这件事仍然存在（换棋盘 ⇒ 大小行的语义翻）⇒ 归
+			#     `_rebuild_size_opt_items()`，由 `_select_board_pair()` 调。判据在
+			#     `--einsteintest` 2b（走真实路径、不重建页面）。
 			"nav":
 				now_sel = _nav_tile_selected(int(it.get("page_id", -1)))
 				# ★★ 2026-10-16 补（用户报的 bug：「主菜单切换棋盘刷新后『练习』的已选状态会取消」）：
@@ -2960,6 +3125,10 @@ func _refresh_selection() -> void:
 		# ⚰️ 2026-10-12：这里原有「把选中项同步进 `_stones`（铺黑子）/ 取消选择则移除，
 		#   并触发落子或提子动画」那一整段 —— 随黑砖族整族删除。
 		#   ⇒ `selected` 现在是**唯一**的选中态真源，没有再需要跟它同步的第二份记账。
+	# 三个下拉的选中项与状态同源（瓷砖只处理 `selected`，下拉要单独 select）。
+	_set_board_opt_selected()
+	_set_size_opt_selected()
+	_set_mode_opt_selected()
 	_sync_menu_bg()        # ★ 同理：首页主视觉的背景盘型也跟选择走（2026-10-02 重设计）。
 	#   ★ 挂在这个"选择变了"的统一收口上，而不是散在 `_select_board` / `_activate_size_slot`
 	#   各自调一遍 —— 后者是"两处真相"的温床：将来新增一条改选择的路径就会漏掉背景同步，
@@ -2969,6 +3138,8 @@ func _refresh_selection() -> void:
 # ====== 设置**面板**（原生控件，非瓷砖）======
 # 设置界面用普通 UI 控件（滑块 / 复选 / 按钮），居中、随窗口自适应；
 # 不再使用菱形瓷砖按钮。所有控件挂在 _settings_root 下，切换面板时整体销毁。
+
+
 func _build_settings_ui() -> void:
 	_clear_settings_ui()
 	var vw := get_viewport_rect().size.x
@@ -3077,6 +3248,11 @@ func _build_settings_ui() -> void:
 		if p: Music.play_bgm() else: Music.stop_bgm())
 	auto_row.add_child(_ui_label("自动播放音乐")); auto_row.add_child(auto_cb)
 	root.add_child(auto_row)
+	# ★ 精简版（开源包）不构建「语音」组：语音只服务于联机，而精简版连「对弈」入口都没有
+	#   ⇒ 留着它等于给玩家一个永远用不到的麦克风设置（还会泄漏"这游戏本该能联机"的暗示）。
+	#   组本身不建，`_tick_mic_debug` 里的 `_mic_dev_pick` / `_mic_out_pick` 为空即自然空转。
+	if not GameConfig.lite:
+		root.add_child(_build_mic_group())
 	root.add_child(_build_display_group())
 
 	# —— 外观（背景色 / 瓷砖色，实时预览并持久化）——
@@ -3096,6 +3272,610 @@ func _build_settings_ui() -> void:
 	_style_page_button(back)
 	back.pressed.connect(func() -> void: _set_page(PAGE_MAIN))
 	root.add_child(back)
+
+# ====== 麦克风（设置页，2026-11-01）======
+## 用户口令（2026-11-01 第二轮）：「设置页麦克风别搞这么专业啊，只要选择麦克风设备和
+## 麦克风声音阈值就行了」⇒ 本组**只留两件玩家真会调的东西**：设备、声音阈值。
+## 撤掉的是旋钮，不是能力：采集增益 / 播放增益 / 抖动缓冲 / 录制回放 已从界面移除，
+## 真源仍在 `GameConfig`（走默认值，`VoiceChat` 照旧读它们），对局链路一行没改。
+##
+## ★ 为什么放设置页、不放对局里：调麦克风是**一次性**的事（换设备、找合适阈值），
+##   而它需要"一直采、看着音量说话"的场地 —— 对局里没有这个空档；更重要的是，
+##   录音状态出现在对局页会让玩家怀疑"我说话是不是被传出去了"（隐私观感）。
+##
+## ★★ 它复用 `VoiceChat` —— 与对局**完全同一套**采集/重采样/ADPCM/播放代码，不是另写一条
+##   "只是测测"的旁路。旁路测通了证明不了对局链路通：本批开发时抓到的那两个静默 bug
+##   （ADPCM 半字节顺序写反、播放器永远建不出来）在"旁路"里都不会出现。
+
+func _build_mic_group() -> VBoxContainer:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	box.add_child(_ui_group_label("语音"))
+	# ---- ① 麦克风（输入设备）----
+	var row_dev := HBoxContainer.new()
+	row_dev.add_theme_constant_override("separation", 10)
+	row_dev.add_child(_ui_label("麦克风"))
+	_mic_dev_pick = _make_device_pick()
+	# ★ `select()` **不发** `item_selected`（Godot 4 口径）⇒ 下面 `_refresh_mic_devices()`
+	#   里同步当前设备不会误触发"切设备"。实测踩过同类坑的是 `CheckButton.button_pressed`：
+	#   那个用普通赋值**会**回调 ⇒ 本工程给它配了幂等守卫。这里两种语义都写清楚，免得混淆。
+	#   ⚠️ 这条口径由 `--mictest` ④ 守着（正例：手工 emit 必须触发；负例：刷新必须不触发）。
+	_mic_dev_pick.item_selected.connect(_on_mic_device_selected)
+	row_dev.add_child(_mic_dev_pick)
+	box.add_child(row_dev)
+
+	# ---- ② 扬声器（输出设备）----
+	# ★ 放在这里而不是「声音」组：玩家换耳机时脑子里想的是"语音这条要走耳机"，
+	#   两个下拉相邻才找得到；而且 `AudioServer.output_device` 是**整台引擎**的，
+	#   语音、音乐、音效一起走 —— 分开放反而会让人以为语音单独出一条线。
+	var row_out := HBoxContainer.new()
+	row_out.add_theme_constant_override("separation", 10)
+	row_out.add_child(_ui_label("扬声器"))
+	_mic_out_pick = _make_device_pick()
+	_mic_out_pick.item_selected.connect(_on_mic_output_selected)
+	row_out.add_child(_mic_out_pick)
+	box.add_child(row_out)
+
+	# ---- ③ 说话音量 + 声音阈值：**同一条** ----
+	# ★ 阈值就是 `VoiceChat.vad_rms`（噪声门限）：低于它的采集块**不编码、不发送**。
+	#   玩家口径上这叫"声音阈值 / 灵敏度"——调高 = 更不容易被环境噪声打开。
+	# ★ 为什么合成一条（用户 2026-11-01 口令）：见 `_MicBar` 的头注 ——
+	#   分两行时"滑条的 0.05"和"电平条的 25%"是两把尺子，玩家无法对照。
+	var row_lv := HBoxContainer.new()
+	row_lv.add_theme_constant_override("separation", 10)
+	row_lv.add_child(_ui_label("说话音量"))
+	_mic_bar = _MicBar.new()
+	_mic_bar.custom_minimum_size = Vector2(120.0, 28.0)
+	_mic_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_mic_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_mic_bar.tooltip_text = "在这条上按住左右拖动 = 设置声音阈值（竖线所在位置）"
+	# 初值**直接写字段、不发信号**：建页时发 `value_changed` 会走一遍存盘（自检口径也不许）
+	_mic_bar.norm = clampf(GameConfig.voice_vad / _MicBar.VAD_MAX, 0.0, 1.0)
+	_mic_bar.value_changed.connect(_on_mic_vad_changed)   # 发的是**物理量** rms
+	row_lv.add_child(_mic_bar)
+	_mic_vad_val = _ui_label(_vad_text(GameConfig.voice_vad), 16)
+	_mic_vad_val.custom_minimum_size = Vector2(96.0, 0.0)
+	row_lv.add_child(_mic_vad_val)
+	# 「测试麦克风」= 采集开关（`VoiceChat.start_monitor()`：只采不算、不进网络、不建包）
+	_mic_mon_btn = Button.new()
+	_mic_mon_btn.text = "测试麦克风"
+	_mic_mon_btn.toggle_mode = true
+	_mic_mon_btn.custom_minimum_size = Vector2(110.0, 32.0)
+	_style_page_button(_mic_mon_btn)
+	_mic_mon_btn.toggled.connect(_on_mic_monitor_toggled)
+	row_lv.add_child(_mic_mon_btn)
+	box.add_child(row_lv)
+
+	# ---- ④ 一句状态（说人话：能用 / 不能用 + 为什么）----
+	_mic_status = _ui_label("状态：点「测试麦克风」可以试一下", 16)
+	box.add_child(_mic_status)
+
+	box.add_child(_ui_hint("点「测试麦克风」说话：音量涨过竖线，对面才听得到；太吵就往右拖。"))
+	_refresh_mic_devices()
+	_refresh_out_devices()
+	return box
+
+
+## 阈值 → 给玩家看的文案（`_MicBar`、设置页、状态行共用**一处**换算）。
+## ★ 0 单独写成「关」：显示「0.0%」时玩家会以为"设成 0 = 最灵敏都没用"，
+##   而实际语义是"不过滤、全发"。这两个意思必须长得不一样。
+func _vad_text(v: float) -> String:
+	if v <= 0.0001:
+		return "关"
+	return "%.1f%%" % (v * 500.0)
+
+
+## 造一个统一外观的设备下拉（宽 260 / 裁字 / 不按最长项撑宽）。
+## ★ 这几条坑对**输入和输出两个下拉**完全一样，所以必须走同一个函数。
+##   复制两遍的那份早晚会被改漏一条 —— 而且漏的那条只在真机才显形（见下）。
+func _make_device_pick() -> OptionButton:
+	var p := OptionButton.new()
+	# 铺满整行剩余宽度：**右边与其他行对齐**。第一版给固定 260 + `SHRINK_BEGIN`，
+	# 目检发现两个下拉的右边缘比「说话音量」那行短一大截，整组看着参差。
+	# ★ `custom_minimum_size.x` 只留 160 当下限（窗口极窄时不至于挤成一条线）。
+	p.custom_minimum_size = Vector2(160.0, 32.0)
+	p.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# ★★ `fit_to_longest_item` 默认 **true** —— 这是第三版才找出来的真凶：
+	#   `custom_minimum_size` 只是**下限**，而 OptionButton 会把"最长那条选项"的宽度
+	#   报进自己的最小宽。于是 headless（设备列表只有「（系统默认）」一条）量到 260 ✓，
+	#   真窗口（本机有真实设备、名字长）量到 **421** ✗ —— 同一份代码两个数，
+	#   说明差异不在我们写的常量上，而在**运行期才有的选项文本**上。
+	#   关掉之后才真的按 260 走；`clip_text` 保证长名字被裁而不是溢出色块。
+	p.fit_to_longest_item = false
+	p.clip_text = true
+	# ★★ 2026-11-07 修（用户报「设置页的下拉菜单在更换主题时不会立刻变换颜色」，第二次返工）：
+	#   原来这里直接调 `GameConfig.style_theme_button()` —— 样式盒是**建页那一次**算出来的，
+	#   而控件**没有登记进 `_page_btns`** ⇒ `_restyle_page_buttons()` 换主题时压根遍历不到它
+	#   （上一轮只在那个循环里补了 popup 重套，对没登记的控件等于没补）。
+	#   症状就是截图里那两条土黄长条：整页都换成粉紫主题了，它俩还停在旧主题。
+	#   ⇒ 改走**统一入口** `_style_menu_opt()`：登记 + 立体盒 + 呼吸 + popup 主题色一次到位，
+	#     也顺带解决"扁平长条和页面其它按钮不是一套语言"。
+	#   ⚠️ 字号用 18（设置页标签是 16，主菜单三个下拉用 20），别让设备名比整页大一号。
+	#   ★ `breathe=false`：设置页下拉**不要动效**（用户 2026-11-07 口令）。立体盒照给，
+	#     只是不进 `_opt_breath`；主菜单三个下拉与对弈页座位下拉仍用默认 true。
+	_style_menu_opt(p, 18, false)
+	return p
+
+
+## 填一个设备下拉（第 0 项恒为「（系统默认）」）。返回选中的索引。
+## ★ 抽出成函数是因为**输入/输出两个下拉必须同语义**：`clear()` 会丢掉选中态，
+##   而 `select()` 不发 `item_selected` —— 这两个行为是"刷新不误触发"的支点，
+##   各写一遍就等于各赌一次。
+func _fill_device_pick(p: OptionButton, names: Array[String], cur: String) -> int:
+	p.clear()
+	for i in names.size():
+		p.add_item(names[i], i)
+	var sel := 0
+	for i in names.size():
+		if names[i] == cur:
+			sel = i
+			break
+	p.select(sel)
+	p.tooltip_text = "当前：%s" % names[sel]
+	return sel
+
+
+## 长说明文字：**必须自动换行**。
+## ★★ 这是一个真实踩到的回归（`--settest` 那两条「内容列不过宽 ✗ / 不横向溢出 ✗」）：
+##   `Label` 默认不换行 ⇒ 它的最小宽度 = **整行文字宽度**（这条 60 多字 × 14px ≈ 840px），
+##   于是 VBox 的最小宽被撑到 860，把设置页右栏从 520 顶到 860，整页横向溢出。
+##   ⇒ 凡是"一句人话"级别的说明都走本函数，别直接 `_ui_label(long_text, 14)`。
+func _ui_hint(text: String) -> Label:
+	var l := _ui_label(text, 14)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	# ★ 最小宽给 1：autowrap 只在**宽度受限**时才折行，而"受不受限"由最小宽度决定。
+	#   留 0 或 1 都行，但**不能**不设 —— 不设时 Label 仍会把整行宽度报给容器。
+	l.custom_minimum_size = Vector2(1.0, 0.0)
+	return l
+
+
+## 声音阈值 → GameConfig + 存盘。
+## ★ 拖动时 `value_changed` 会连续触发（几十次），所以这里**每次都存盘**是有意的：
+##   `appearance.cfg` 只有几百字节，一次 <1ms，换来的是"松手即存、绝不丢"；
+##   改用 `drag_ended` 则键盘/滚轮调值永远不存（那才是真 bug：静默不落盘）。
+## ★ 这里**故意不去改调试实例的 `vad_rms`**：设置页的监听是"看音量"，若也过门限，
+##   小声测试就会被自己门掉、表现成"怎么说话条都不动"（同 `_ensure_mic_voice()` 里的注）。
+##   阈值真正生效的地方是对局（`game.gd::_apply_voice_config` → `VoiceChat.vad_rms`）。
+func _on_mic_vad_changed(v: float) -> void:
+	GameConfig.voice_vad = clampf(v, 0.0, 0.2)
+	GameConfig.mark_appearance_dirty()      # 用户操作 ⇒ 置脏（第 0 步脏标记门）
+	GameConfig.save_appearance()
+	# 条与文案是同一次操作的**两个投影**：只更新一个的话，玩家拖完松手看到的
+	# 会是上一档的百分比（`_MicBar.set_norm` 已经把 norm 收敛过，这里照真源写）
+	if _mic_vad_val != null and is_instance_valid(_mic_vad_val):
+		_mic_vad_val.text = _vad_text(GameConfig.voice_vad)
+	_mic_status_text = ""
+
+
+## 设备下拉 → GameConfig + 重启采集。
+func _on_mic_device_selected(idx: int) -> void:
+	_mic_dev_hits += 1        # 判据探针（--mictest ④），见变量声明处
+	if idx < 0 or idx >= _mic_dev_names.size():
+		return
+	var dev: String = "" if idx == 0 else String(_mic_dev_names[idx])
+	GameConfig.voice_input_device = dev
+	GameConfig.mark_appearance_dirty()
+	GameConfig.save_appearance()
+	var vm := _ensure_mic_voice()
+	# ★ 必须走 `set_input_device()`（它会重启采集流）：光改 `AudioServer.input_device`
+	#   在某些平台上不会把已在播的 `AudioStreamMicrophone` 重绑到新设备
+	#   ⇒ 换完麦克风电平条一动不动，且没有任何报错。
+	vm.set_input_device(dev)
+	# `clip_text` 之后长设备名会被裁，悬停给全名（这句就是裁字的补偿，不是可选装饰）
+	_mic_dev_pick.tooltip_text = "当前：%s" % ("（系统默认）" if dev == "" else dev)
+	_mic_status_text = ""            # 强制下一个 tick 重写状态行
+	_tip("输入设备：%s" % ("系统默认" if dev == "" else dev))
+
+
+func _refresh_mic_devices() -> void:
+	if _mic_dev_pick == null or not is_instance_valid(_mic_dev_pick):
+		return
+	_mic_dev_names = ["（系统默认）"]
+	for d in AudioServer.get_input_device_list():
+		_mic_dev_names.append(String(d))
+	_fill_device_pick(_mic_dev_pick, _mic_dev_names, GameConfig.voice_input_device)
+
+
+func _refresh_out_devices() -> void:
+	if _mic_out_pick == null or not is_instance_valid(_mic_out_pick):
+		return
+	_mic_out_names = ["（系统默认）"]
+	for d in AudioServer.get_output_device_list():
+		_mic_out_names.append(String(d))
+	_fill_device_pick(_mic_out_pick, _mic_out_names, GameConfig.voice_output_device)
+
+
+## 扬声器下拉 → GameConfig + 立刻应用到引擎。
+## ★ 立刻生效（不像别的设置要等）：换输出设备是玩家**当场**要听到效果的操作
+##   —— 点了没反应会让人以为坏了。`apply_audio_output_device()` 自带幂等守卫。
+func _on_mic_output_selected(idx: int) -> void:
+	if idx < 0 or idx >= _mic_out_names.size():
+		return
+	var dev: String = "" if idx == 0 else String(_mic_out_names[idx])
+	GameConfig.voice_output_device = dev
+	GameConfig.mark_appearance_dirty()
+	GameConfig.save_appearance()
+	GameConfig.apply_audio_output_device()
+	_tip("扬声器：%s" % ("系统默认" if dev == "" else dev))
+
+
+## 开始 / 停止监听。★ 只采不算（`VoiceChat.start_monitor()`）：不进网络、不建包。
+func _on_mic_monitor_toggled(on: bool) -> void:
+	var vm := _ensure_mic_voice()
+	if on:
+		if not vm.start_monitor():
+			# 起不来必须**当场**把开关弹回去并写理由，不留"亮着但没反应"的开关
+			vm.stop_monitor()
+			if _mic_mon_btn != null and is_instance_valid(_mic_mon_btn):
+				_mic_mon_btn.set_pressed_no_signal(false)
+			_mic_status_text = ""
+			_tip("麦克风不可用：%s" % vm.mic_reason())
+			return
+	else:
+		vm.stop_monitor()
+	_mic_status_text = ""
+
+
+## 惰性建调试实例。★ 参数必须从 `GameConfig` 灌（与 `game.gd::_apply_voice_config` 同一组口径）：
+## 用类默认值的话，玩家在设置里调过的值在这里不生效 ⇒ "调试时好好的，对局里变小声"。
+func _ensure_mic_voice() -> VoiceChat:
+	if _mic_voice != null and is_instance_valid(_mic_voice):
+		return _mic_voice
+	_mic_voice = VoiceChat.new()
+	_mic_voice.name = "MicDebug"
+	add_child(_mic_voice)
+	_mic_voice.input_gain = clampf(GameConfig.voice_input_gain, 0.2, 3.0)
+	_mic_voice.output_gain = clampf(GameConfig.voice_output_gain, 0.0, 2.0)
+	_mic_voice.jitter_packets = clampi(GameConfig.voice_jitter, 1, 6)
+	_mic_voice.vad_rms = 0.0    # ★ 设置页的监听**不吃**声音阈值：否则"小声测试"会被自己门掉，
+								#   表现成"怎么说话条都不动"，还以为是麦克风坏了。
+								#   阈值只在**对局**里生效（`game.gd::_apply_voice_config`）。
+	if GameConfig.voice_input_device != "":
+		AudioServer.input_device = GameConfig.voice_input_device
+	return _mic_voice
+
+
+## 电平条 / 状态行的**唯一**刷新点（由 `_process` 节流调用）。
+## ★ 只在设置页可见时跑（`_settings_root` 存在）—— 别的地方没有这些东西要刷。
+func _tick_mic_debug(delta: float) -> void:
+	if _mic_bar == null or not is_instance_valid(_mic_bar):
+		return
+	_mic_tick_acc += delta
+	if _mic_tick_acc < 0.08:
+		return
+	_mic_tick_acc = 0.0
+	var vm := _mic_voice
+	var rms := 0.0
+	var alive: bool = vm != null and is_instance_valid(vm)
+	if alive:
+		rms = vm.last_rms
+	# ★ 音量用 `sqrt` 映射而不是线性：说话时 RMS 大约 0.03~0.15，
+	#   线性映射下一根 28px 的条只会动 1~3 像素（"看着像坏了"）；
+	#   sqrt 把 0.05 抬到 22%，正常说话就能看到小半条。
+	#   ⚠️ 阈值那根竖线走的是**同一套映射**（`_MicBar` 里两个量都是 0..1 归一化），
+	#   否则"填充 22%、竖线 25%"这句对照就是假的。
+	_mic_bar.level = sqrt(clampf(rms, 0.0, 1.0))
+	_mic_bar.queue_redraw()
+	if _mic_status != null and is_instance_valid(_mic_status):
+		var txt := _mic_status_line(vm, alive, rms)
+		if txt != _mic_status_text:
+			_mic_status_text = txt
+			_mic_status.text = txt
+
+
+## 状态行文案（纯函数：只读实例状态，不写任何东西）。
+## ★ 说人话：玩家要的只有"能用吗 / 不能用是为什么 / 现在多响"，不是 Hz 和每包字节数
+##   （那两项留在 `VoiceChat.info()` 给自检用）。
+## ★ 为什么把「现在 %」写进状态行：条上的对照是**图形**的，而人报数时用的是百分数
+##   （"我说话才 8%，阈值 25%"）。两处都留着，玩家才能自己判断该拖多远。
+func _mic_status_line(vm: VoiceChat, alive: bool, rms: float) -> String:
+	if not alive:
+		return "状态：点「测试麦克风」可以试一下"
+	if vm.mic_available():
+		return "麦克风正常 · 现在 %d%% · 阈值 %s" % [
+				int(round(clampf(rms, 0.0, 1.0) * 100.0)), _vad_text(GameConfig.voice_vad)]
+	return "麦克风用不了：%s" % vm.mic_reason()
+
+
+# ---------------------------------------------------------------- 自检（--mictest）
+## 自检（--mictest，2026-11-01）：设置页的麦克风调试组。
+##
+## ★ 这一档守的是"**加了控件但没接上**"这一族，它们的共同特征是**零报错**：
+##   · 控件建了却没挂进设置页树 ⇒ 玩家根本看不到（①）；
+##   · 电平条读错量（比如拿原始幅度当 RMS、或忘了刷新）⇒ 一直是 0%，看着像麦克风坏（②）；
+##   · 滑块只改显示、没写真源 / 没落盘 ⇒ "调了没效果"、"重启就回去了"（③）；
+##   · 刷新设备列表顺手触发了 `item_selected` ⇒ 打开设置页就等于切了一次设备（④ 正负成对）；
+##   · 监听起不来却把按钮留在按下态 ⇒ "亮着但我说话没反应"（⑤）；
+##   · 建实例时用类默认值而不是真源 ⇒ 玩家调过的增益在调试页不生效（⑥）；
+##   · 切页没收摊 ⇒ 麦克风一直开着（⑦，隐私）。
+##
+## ★ 无真麦克风怎么测：headless 的音频驱动是 Dummy，`AudioStreamMicrophone` 取不到帧。
+##   所以电平那条**直接喂合成采集块**（`_push_capture` 是采集回调的唯一入口，签名就是
+##   "一帧立体声"）—— 这属于探针级入口，被测的是"电平派生 + UI 刷新"，不是"驱动有没有声音"。
+func _mic_debug_self_test() -> void:
+	print("[mictest] ===== 设置页 · 麦克风调试 =====")
+	var checks: Array = []
+	var sv := {
+		"gain": GameConfig.voice_input_gain, "out": GameConfig.voice_output_gain,
+		"jit": GameConfig.voice_jitter, "vad": GameConfig.voice_vad,
+		"dev": GameConfig.voice_input_device,
+	}
+	# ★★ 先备份 `appearance.cfg` 的**原始字节**（口径同 `--gatediag`：开头备份、结尾原样写回）。
+	#   为什么按字节而不按"内存值还原"：本自检里有三处会真写这个文件 ——
+	#     ③ 的"存盘读回"、④ 的 `item_selected.emit(0)`（走的是真正选中路径 ⇒ 存盘）、
+	#     ⑥ 临时把真源抖动改成 5。按内存值复原本身没错，但**一旦中途崩/提前退出**
+	#     复原那一段就跑不到，中间值会永久留下（2026-11-01 实测踩到：配置里留下
+	#     `input_gain=0.95 / jitter=1`，且后继每次运行都"忠实继承"这份脏值）。
+	#   按字节写回是幂等的：跑一百遍，md5 与跑之前完全一致。
+	# ★★★ 而且要备份**两份、两个路径**：
+	#   · `eff_path` = `GameConfig._appearance_redirect(APPEARANCE_PATH)` —— 这才是
+	#     `load/save_appearance()` 实际读写的那个文件。`--mictest` 名字含 `test` ⇒
+	#     `is_automated_run()` 判真 ⇒ 实际写的是 `appearance_selftest.cfg`。
+	#     拿用户路径去备份就等于"守一个自检根本不会碰的文件"，绿得没有对象（§110）。
+	#   · `user_path` = 玩家真配置。它是**另一个**对象，单独断言"零字节改动"——
+	#     这条才是改道失效时的报警器（改了 `is_automated_run()` 口径会立刻红）。
+	var user_path: String = ProjectSettings.globalize_path(GameConfig.APPEARANCE_PATH)
+	var eff_path: String = ProjectSettings.globalize_path(
+			GameConfig._appearance_redirect(GameConfig.APPEARANCE_PATH))
+	var user_before: PackedByteArray = FileAccess.get_file_as_bytes(user_path)
+	var cfg_before: PackedByteArray = FileAccess.get_file_as_bytes(eff_path)
+	print("[mictest]   配置路径：实际写=%s 用户真配置=%s（改道生效=%s）" % [
+			eff_path.get_file(), user_path.get_file(), str(eff_path != user_path)])
+	_set_page(PAGE_SETTINGS)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+	# ---- ① 控件齐全、且真的挂在这页的树里 ----
+	# ★ 6 个控件就是**全部**了（用户 2026-11-01 口令：只留两个设备下拉 + 声音阈值）。
+	#   这条同时是"有没有偷偷把专业旋钮加回来"的守卫：`ctrls.size()` 被钉死。
+	var ctrls: Array = [_mic_status, _mic_bar, _mic_vad_val, _mic_dev_pick, _mic_out_pick,
+			_mic_mon_btn]
+	var missing := 0
+	var outside := 0
+	for c in ctrls:
+		if c == null or not is_instance_valid(c):
+			missing += 1
+			continue
+		if _settings_root == null or not is_instance_valid(_settings_root) \
+				or not _settings_root.is_ancestor_of(c):
+			outside += 1
+	checks.append(["① 语音组 6 个控件齐全、都在树里、且没有多一个 · 只留设备+阈值",
+			missing == 0 and outside == 0 and ctrls.size() == 6,
+			"缺=%d 不在树内=%d 控件数=%d" % [missing, outside, ctrls.size()]])
+	# 宽度明细：两个下拉**同宽**、声音条吃掉剩下的宽度（目检过三次才对齐），写出来省得下次再猜
+	print("[mictest]   宽度：输入下拉=%.0f 输出下拉=%.0f 声音条=%.0f 阈值标签=%.0f" % [
+			_mic_dev_pick.size.x, _mic_out_pick.size.x, _mic_bar.size.x, _mic_vad_val.size.x])
+
+	# ---- ② 声音条的填充跟着**实际幅度**走（量函数关系，不量"非零"）----
+	#   ★ 只断言"level > 0"的坏处：把 `last_rms` 写成常数 0.5 也能过。
+	#     这里喂两块幅度差 4 倍的采集块，要求 `level` 单调上升且比值接近 √4 = 2
+	#     （level = sqrt(rms)，两条量之间的关系是被测公式本身，不能被判定"随便涨一点就行"）。
+	var vm := _ensure_mic_voice()
+	vm._push_capture(_synth_capture(0.10, 882))
+	_tick_mic_debug(1.0)
+	var lv1: float = _mic_bar.level
+	vm._push_capture(_synth_capture(0.40, 882))
+	_tick_mic_debug(1.0)
+	var lv2: float = _mic_bar.level
+	var ratio: float = lv2 / maxf(lv1, 0.0001)
+	checks.append(["② 声音条填充随幅度单调上升且接近 √4 倍｜只查非零的话常数也能过",
+			lv1 > 0.01 and lv2 > lv1 and ratio > 1.5 and ratio < 2.6,
+			"level %.3f → %.3f（比值 %.2f，期望≈2）" % [lv1, lv2, ratio]])
+
+	# ---- ③ 在条上拖 → 真源 → 存盘读回 → 阈值标签 ----
+	#   ★ 四条一起量（缺一条都能骗过）：条真的动了 / 真源改了 / 文件里读得回来 /
+	#     显示的百分比也跟着走。只量第一条的话，"设置页调了、对局里没生效"永远抓不到
+	#     （那是玩家最常抱怨的那种）；只量真源不量文件，则"重启就回去了"抓不到。
+	#   ★ 走 `set_norm(..., true)` 而不是 `_mic_bar.norm = x`：后者不发信号，
+	#     等于绕过了被测的那条链（本判据测的是"拖一下会发生什么"，不是"字段能不能赋值"）。
+	_mic_bar.set_norm(0.25, true)          # 0.25 × VAD_MAX(0.2) = 0.05
+	var g1: float = GameConfig.voice_vad
+	var cf := ConfigFile.new()
+	var read_ok: bool = cf.load(GameConfig.APPEARANCE_SELFTEST_PATH) == OK
+	var g_file: float = float(cf.get_value("voice", "vad", -1.0)) if read_ok else -1.0
+	var lab: String = _mic_vad_val.text if _mic_vad_val != null else ""
+	checks.append(["③ 声音阈值：条→真源→文件→标签四处一致 · 且不门掉监听",
+			absf(g1 - 0.05) < 0.0001 and absf(g_file - g1) < 0.0001 and lab != "关" \
+					and absf(vm.vad_rms) < 0.0001,
+			"真源=%.3f 文件=%.3f 文件读出=%s 标签=%s 监听门限=%.3f" % [
+					g1, g_file, str(read_ok), lab, vm.vad_rms]])
+
+	# ---- ④ 刷新设备列表**不许**触发选中回调（正负成对）----
+	#   ★ 负例（刷新不触发）单独一条没有意义：回调压根没接上时它也绿。
+	#     所以配一个正例：手工 emit 一次必须让计数 +1。
+	var hits0: int = _mic_dev_hits
+	_refresh_mic_devices()
+	var no_spurious: bool = _mic_dev_hits == hits0
+	_mic_dev_pick.item_selected.emit(0)
+	var wired: bool = _mic_dev_hits == hits0 + 1
+	checks.append(["④ 刷新设备不触发选中 + 手工选中必触发｜否则开设置页就等于切设备",
+			no_spurious and wired, "刷新前=%d 刷新后=%d 手工选中后=%d" % [
+					hits0, hits0 + (0 if no_spurious else 1), _mic_dev_hits]])
+
+	# ---- ⑤ 监听开关与环境自洽（起不来必须弹回去）----
+	#   ★ 形状：`按钮按下态 == 实例真的在监听`。headless 下两边都必须 false（如实报告环境），
+	#     真机上两边都必须 true。坏版本（失败也留在按下态）在两种环境下都会让这条红。
+	#   ★★ 必须用**赋值** `button_pressed = true`，不能 `toggled.emit(true)`——
+	#     后者只发信号、**不改按下态** ⇒ `button_pressed` 恒 false，只要麦克风真能起来
+	#     这条就必红（本工程 2026-11-01 真窗口复现：按钮=false 实例=true）。
+	#     而它在 headless 下反而"通过"，因为那边两边都是 false ⇒ 虚假绿灯。
+	#     `button_pressed` 赋值**会**同时发 `toggled`（同 CheckButton，见建控件处注释），
+	#     所以这一行等价于"真的按下去"。§108：先触副作用再断言。
+	_mic_mon_btn.button_pressed = true
+	var btn_on: bool = _mic_mon_btn.button_pressed
+	var mon: bool = vm.is_monitoring()
+	var why: String = "" if mon else vm.mic_reason()
+	checks.append(["⑤ 监听开关与实例状态一致｜起不来必须弹回按钮并给理由",
+			btn_on == mon, "按钮=%s 实例=%s 理由=%s" % [str(btn_on), str(mon), why]])
+
+	# ---- ⑥ 重建实例时参数来自**真源**（不是类默认值）----
+	#   ★ 造一个和默认值不同的真源（抖动 5 包 ≠ 默认 2），重建整页与实例，看它有没有跟上。
+	#     坏版本（`_ensure_mic_voice()` 不灌）在这里必然红，而真机上只会表现为"调过又退回"。
+	GameConfig.voice_jitter = 5
+	_clear_settings_ui()
+	_build_settings_ui()
+	await get_tree().process_frame
+	var vm2 := _ensure_mic_voice()
+	var seeded: bool = vm2.jitter_packets == 5 and absf(vm2.input_gain - GameConfig.voice_input_gain) < 0.001
+	checks.append(["⑥ 重建实例时从真源灌参数｜用类默认值 ⇒ 玩家调过的值下一局静默失效",
+			seeded, "实例 jitter=%d（期望 5）input_gain=%.2f（真源 %.2f）" % [
+					vm2.jitter_packets, vm2.input_gain, GameConfig.voice_input_gain]])
+
+	# ---- ⑦ 切页必须收摊（麦克风是引擎级资源，不随控件树释放）----
+	var had_voice: bool = _mic_voice != null and is_instance_valid(_mic_voice)
+	_set_page(PAGE_MAIN)
+	await get_tree().process_frame
+	var cleared: bool = (_mic_voice == null) and (_mic_bar == null) and (_mic_status == null) \
+			and (_mic_out_pick == null)
+	checks.append(["⑦ 切页后调试实例与控件引用全部清空｜不清 = 进过设置页麦克风就一直开着",
+			had_voice and cleared, "切页前有实例=%s 切页后已清=%s" % [str(had_voice), str(cleared)]])
+
+	# ---- 复原现场 ----
+	GameConfig.voice_input_gain = float(sv["gain"])
+	GameConfig.voice_output_gain = float(sv["out"])
+	GameConfig.voice_jitter = int(sv["jit"])
+	GameConfig.voice_vad = float(sv["vad"])
+	GameConfig.voice_input_device = String(sv["dev"])
+	# ★ 内存值还原 + **字节级还原**双保险，且相互校验：写回后再读文件，必须与备份逐字节相同。
+	#   只按内存值存一遍的话，`save_appearance()` 的字段顺序/浮点格式化都可能让文件"值对但字节变"，
+	#   这时"玩家配置有没有被自检动过"就变成无法判定的事（本项目口径：判据要能回答"红了做什么"）。
+	#   ★ 空备份 = 这台机器原本没有配置文件（首次运行）⇒ 没有"可损坏的原件"，判为通过并把话说清楚，
+	#     否则新机器上这条会无缘无故红一次，红得没有对象。
+	var restored := cfg_before.is_empty()
+	if not cfg_before.is_empty():
+		var fw := FileAccess.open(eff_path, FileAccess.WRITE)
+		if fw != null:
+			fw.store_buffer(cfg_before)
+			fw.close()
+			restored = FileAccess.get_file_as_bytes(eff_path) == cfg_before
+	if not restored:
+		print("[mictest]   ↳ 先把 `%s` 恢复成备份再跑，别让脏值传染下一次" % eff_path.get_file())
+	checks.append(["⑧ 自检跑完实写文件逐字节还原｜按内存值复原一旦中途崩就留脏值",
+			restored, "%s 备份 %d 字节 / 结果 %s" % [eff_path.get_file(), cfg_before.size(),
+					"原先不存在" if cfg_before.is_empty() else
+					("逐字节一致" if restored else "不一致")]])
+	var user_after: PackedByteArray = FileAccess.get_file_as_bytes(user_path)
+	var user_safe: bool = user_after == user_before
+	checks.append(["⑨ 玩家真配置零字节改动｜改道失效、判据口径被放宽时这条会立刻红",
+			user_safe, "%s 前 %d 字节 / 后 %d 字节 / %s" % [user_path.get_file(),
+					user_before.size(), user_after.size(),
+					"一致" if user_safe else "被改写"]])
+
+	var failed: Array = []
+	for c in checks:
+		var okc: bool = (c[1] is bool) and (c[1] as bool)
+		if not okc:
+			failed.append(str(c[0]))
+		print("[mictest] %s %s（%s）" % [c[0], "✓" if okc else "✗", c[2]])
+	print("[mictest] 判据 %d 条，失败 %d 条%s" % [checks.size(), failed.size(),
+			"" if failed.is_empty() else "：" + ", ".join(failed)])
+	print("[mictest] 结论：", "通过 ✓" if failed.is_empty() and checks.size() > 0 else "失败 ✗")
+	get_tree().quit()
+
+
+## 合成一帧采集数据（立体声，与 `AudioEffectCapture.get_buffer()` 同形）。
+## ★ 频率取 300Hz（语音基频附近）：这既避开二分之一采样点那种"半波正好落在块边界"的巧合，
+##   也不至于像 1kHz 那样在 882 帧的块里出现不整齐的相位。
+func _synth_capture(amp: float, frames: int) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	out.resize(frames)
+	var mix := float(AudioServer.get_mix_rate())
+	if mix <= 0.0:
+		mix = 44100.0
+	for i in frames:
+		var s := amp * sin(TAU * 300.0 * float(i) / mix)
+		out[i] = Vector2(s, s)
+	return out
+
+
+## 「说话音量 + 声音阈值」合成的一条。
+## ★ 用户口令（2026-11-01 第三轮）：「把麦克风阈值和测试麦克风做成一个条，这样玩家就可以
+##   对照声音大小调整阈值了」。原来的形态是**两行**（`HSlider` 调阈值 + 自绘电平条看音量），
+##   而两者的刻度根本不是一回事（滑条是 rms 0~0.2、电平条是 sqrt(rms) 0~1）
+##   ⇒ 玩家要自己在脑子里对齐两把尺子，等于没法对照。合成一条后只剩一把刻度：
+##   **填充 = 现在多响，竖线 = 到这儿才发给对面**，拖动就是在同一把尺子上划线。
+## ★ 为什么不用 `ProgressBar` / `HSlider` 叠起来：那两个的填充色来自**引擎默认主题**，
+##   进了 `--menutest` ⑯ 的明度扫描就得为它们单独拟色；自绘既不吃主题遍历，
+##   也能把"没到阈值的那段是淡的"这种语义画进去（滑条画不了这个）。
+## ★ 所有图元都是 `draw_rect` / `draw_line`（`antialiased` 用默认 false）—— §128 那条
+##   "自绘图元禁抗锯齿"针对的正是多边形/线，别多写一句 `antialiased=true`。
+class _MicBar extends Control:
+	## 阈值滑到尽头时的物理量（= `GameConfig.voice_vad` 的 clamp 上界）。
+	## ★ 归一化只在这里发生一次：条内部一律 0..1，对外（`value_changed`）发**物理量**。
+	##   两边都对外发 0..1 的话，设置页得自己乘一个魔数，那个数迟早和 clamp 上界对不上。
+	const VAD_MAX: float = 0.2
+	signal value_changed(v: float)
+
+	## 实时音量 0..1（由 `_tick_mic_debug` 写：sqrt(rms)，见那里的注）
+	var level: float = 0.0
+	## 阈值 0..1（归一化；0 = 关）
+	var norm: float = 0.0
+
+	var _dragging := false
+
+	func _ready() -> void:
+		focus_mode = Control.FOCUS_ALL
+		mouse_filter = Control.MOUSE_FILTER_STOP
+
+	## 唯一的写入点。`emit_it=false` 用于"从真源回灌初值"（别触发回写/存盘）。
+	func set_norm(n: float, emit_it: bool) -> void:
+		var c: float = clampf(n, 0.0, 1.0)
+		if is_equal_approx(c, norm):
+			queue_redraw()
+			return
+		norm = c
+		queue_redraw()
+		if emit_it:
+			value_changed.emit(norm * VAD_MAX)
+
+	## 条上任意 x → 阈值（按下即设、按住横拖连续调）。
+	func _apply_x(x: float) -> void:
+		if size.x > 1.0:
+			set_norm(x / size.x, true)
+
+	func _gui_input(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			_dragging = event.pressed
+			if event.pressed:
+				grab_focus()
+				_apply_x(event.position.x)
+			accept_event()
+		elif event is InputEventMouseMotion and _dragging:
+			_apply_x(event.position.x)
+			accept_event()
+		elif event is InputEventKey and event.pressed:
+			# 键盘也能调（滑条原本就有这个能力，换成自绘条不许丢）
+			if event.keycode == KEY_LEFT or event.keycode == KEY_RIGHT:
+				set_norm(norm + (0.01 if event.keycode == KEY_RIGHT else -0.01), true)
+				accept_event()
+
+	func _draw() -> void:
+		var host: Color = GameConfig.page_surface()
+		var bg: Color = GameConfig.input_box_fill(host)
+		var ink: Color = GameConfig.readable_ink_on(bg)
+		var r := Rect2(Vector2.ZERO, size)
+		draw_rect(r, bg, true)
+		# ---- ① 实时音量填充 ----
+		# ★ 过没过阈值用**透明度**区分，不用换色：颜色只有"强调色"一种可借，
+		#   而"没过阈值"要表达的正是"这段你说了但没发出去"。
+		var w: float = clampf(level, 0.0, 1.0) * size.x
+		if w > 0.5:
+			var fill: Color = GameConfig.accent_color()
+			if level < norm:
+				fill.a *= 0.40
+			draw_rect(Rect2(0.0, 0.0, w, size.y), fill, true)
+		# ---- ② 阈值竖线 + 顶部把手 ----
+		# ★ 手柄画成"挂在线上的一小块"而不是圆点：`draw_circle` 必带抗锯齿，
+		#   本工程自绘图元禁抗锯齿（约 20% 概率 `0xC0000005`，见 §128）。
+		var tx: float = clampf(norm, 0.0, 1.0) * size.x
+		if norm > 0.0:
+			draw_line(Vector2(tx, 0.0), Vector2(tx, size.y), ink, 2.0)
+		# norm==0 = 关：左边缘画一块把手就够，不画线（画了会被当成"阈值在最左"）
+		draw_rect(Rect2(clampf(tx - 3.0, 0.0, maxf(size.x - 6.0, 0.0)), 0.0, 6.0, 8.0), ink, true)
+		# ---- ③ 1px 描边（没有它，浅主题下条与页面底只差 1.10，看不出边界）----
+		draw_rect(r, Color(ink.r, ink.g, ink.b, 0.30), false, 1.0)
+
+
 
 # ====== 显示设置（全屏 / 无边框全屏 / 窗口）======
 ## 三个模式按钮做互斥选择：点哪个就应用到窗口、存盘，并刷新按钮选中态。
@@ -3142,6 +3922,9 @@ func _build_display_group() -> VBoxContainer:
 	return box
 
 ## 应用模式 + 存盘 + 刷新按钮选中态
+
+
+## 应用模式 + 存盘 + 刷新按钮选中态
 func _on_display_mode_pressed(m: int, btns: Array[Button]) -> void:
 	GameConfig.window_mode = m
 	GameConfig.apply_window_mode()
@@ -3160,6 +3943,8 @@ func _on_display_mode_pressed(m: int, btns: Array[Button]) -> void:
 ##   用普通赋值写 `button_pressed`（普通赋值才会刷新视觉），那一下会回调到这里 ⇒
 ##   值没变就必须直接返回，否则「打开设置页」就写了一次盘
 ##   （`--settest` 的「打开设置页不写盘」守的正是这件事）。
+
+
 func _on_graph_mode_toggled(on: bool) -> void:
 	if on == GameConfig.graph_mode:
 		return
@@ -3175,9 +3960,12 @@ func _on_graph_mode_toggled(on: bool) -> void:
 ## 开关状态 ← `GameConfig.graph_mode`（唯一真源）。
 ## ★ 用普通赋值（不是 `set_pressed_no_signal()`）：后者不刷新 CheckButton 的视觉，
 ##   状态对了但画成灰的（`_sync_cursor_controls()` 那条注释里有实测记录）。
+
+
 func _sync_graph_control() -> void:
 	if is_instance_valid(_graph_cb):
 		_graph_cb.button_pressed = GameConfig.graph_mode
+
 
 func _refresh_display_buttons(btns: Array[Button]) -> void:
 	var modes: Array[int] = [GameConfig.MODE_WINDOW, GameConfig.MODE_FULLSCREEN, GameConfig.MODE_BORDERLESS]
@@ -3195,6 +3983,8 @@ func _refresh_display_buttons(btns: Array[Button]) -> void:
 # 配色统一存于 GameConfig（user://appearance.cfg），菜单与对局场景共用。
 # 设置页改动即时生效（菜单背景/瓷砖、文字对比度），关闭取色面板时才写盘。
 ## 把 GameConfig 的配色同步到菜单绘制变量，并刷新预览
+
+
 func _apply_appearance() -> void:
 	_bg_color = GameConfig.bg_color
 	_fat_color = GameConfig.board_color   # 菜单瓷砖=主题棋盘色（与对局棋盘一致，宣纸=木黄…）
@@ -3219,6 +4009,8 @@ func _apply_appearance() -> void:
 ## ★ 直通 `GameConfig.page_surface()` —— 与 `_draw()` 画背景用的是同一个乘积。
 ##   ⚠️ 别再在这里写 `_bg_color * _bg_brightness`：那正是"同一件事两处各算一遍"的老路（铁律 §18），
 ##   而默认明度 1.0 时两份恒等 ⇒ 分叉要等用户在设置页拉过明度才现形。
+
+
 func _page_surface() -> Color:
 	return GameConfig.page_surface()
 
@@ -3226,6 +4018,8 @@ func _page_surface() -> Color:
 ## 否则"传哪张面"就又变成每个调用点各写一份（见上面 `_page_surface()` 的注）。
 ## ★★ 2026-10-19：本函数同时**登记**按钮（见 `_restyle_page_buttons()` 的注）。
 ##   `register = false` 只给"重套"那条路用 —— 它套的本来就是已登记的表，没必要再走一遍去重。
+
+
 func _style_page_button(btn: Button, register: bool = true) -> void:
 	GameConfig.style_theme_button(btn, _page_surface())
 	if register:
@@ -3234,6 +4028,8 @@ func _style_page_button(btn: Button, register: bool = true) -> void:
 ## 页面按钮套**选中**态样式（实心 accent）。与未选态分成两个入口，是因为"哪个是选中"
 ## 只能由各控件自己的真源（`_sel_netmode` / `GameConfig.window_mode`）现判 —— 本函数不猜状态，
 ## **调用点负责在状态变化时把两态重新套一遍**（铁律 7：一组控件两含义 ⇒ 三者同一判据派生）。
+
+
 func _style_page_button_selected(btn: Button, register: bool = true) -> void:
 	GameConfig.style_theme_button_selected(btn, _page_surface())
 	if register:
@@ -3246,6 +4042,7 @@ func _style_page_button_selected(btn: Button, register: bool = true) -> void:
 #   而 `_style_page_button*()` 本来就是页面样式的**唯一入口** ⇒ 在入口登记，口径天然同源。
 #   ⚠️ 用 `WeakRef`：切页时整棵子树会被 free，"谁还活着"由 `_restyle_page_buttons()` 顺手清理。
 var _page_btns: Array[WeakRef] = []
+
 
 func _register_page_btn(btn: Button) -> void:
 	for w in _page_btns:
@@ -3268,6 +4065,8 @@ func _register_page_btn(btn: Button) -> void:
 ## ★ 主题色块（`_make_preset_button` 的 flat 自绘块）不在表里 ⇒ 不会被刷上按钮底，
 ##   它们画的是**各主题自己的颜色**，与当前主题无关（切主题时只需要 `_refresh_preset_swatches()`
 ##   刷描边高亮）。
+
+
 func _restyle_page_buttons() -> void:
 	var alive: Array[WeakRef] = []
 	for w in _page_btns:
@@ -3284,7 +4083,27 @@ func _restyle_page_buttons() -> void:
 			_style_page_button_selected(b, false)
 		else:
 			_style_page_button(b, false)
+		# ★★ 2026-11-07 修（用户报「设置页的下拉菜单在更换主题时不会立刻变换颜色」）：
+		#   `style_theme_button()*` 只重套按钮**本体**；下拉的**弹出列表**是另一个节点
+		#   （`PopupMenu`），它读的是另一组 theme 项 ⇒ 必须在这里补一次。
+		#   漏了这一句的症状：换主题后按钮变色、展开列表还是旧配色（而静态截图看不出来，
+		#   因为截图时列表是收起的 —— 所以只有"真的展开一次"才看得见）。
+		# ★ 主菜单三个下拉还多一层：本体的**立体盒 + 呼吸表**也是我们自己的资源
+		#   ⇒ 换主题必须重造并换掉 `_opt_breath` 里的那一份（否则呼吸还在按旧主题的 accent 脉动）。
+		if b is OptionButton:
+			var ob: OptionButton = b as OptionButton
+			var boxes: Dictionary = GameConfig.style_option_button(ob, _page_surface())
+			# ★ 换主题重造盒时同样尊重 `OPT_META_NO_BREATH`：设置页下拉保持静态立体，
+			#   不因为"重套了一次"就复活呼吸。
+			if not boxes.is_empty() and not bool(ob.get_meta(OPT_META_NO_BREATH, false)):
+				_opt_breath[ob] = boxes
+			else:
+				_opt_breath.erase(ob)
+			GameConfig.style_option_popup(ob, _page_surface())
 	_page_btns = alive
+
+## 外观自检（--apptest）：设置页控件构建 → 应用预设 → 存盘 → 改内存 → 读回校验
+
 
 ## 外观自检（--apptest）：设置页控件构建 → 应用预设 → 存盘 → 改内存 → 读回校验
 func _run_appearance_self_test() -> void:
@@ -3570,22 +4389,34 @@ func _run_appearance_self_test() -> void:
 	#   底色**前后不同**，且等于按新面算出来的期望值（只量"变了"不够 —— 变成错的也满足）。
 	# ★ 按钮从**登记表**里挑（`_page_btns` 就是"页面按钮"这个集合的真源）。挑不到 ⇒ 红：
 	#   那说明登记这条路断了，等于这条判据压根没跑（"没跑"不许长成"通过"）。
+	# ★★ 2026-11-07 **扩面**（用户第二次报「设置页下拉换主题不变色」）：原实现是
+	#   `for w in _page_btns: … break` —— 只量**第一颗**按钮，而设备下拉压根没登记
+	#   （`_make_device_pick()` 当年直接调 `GameConfig.style_theme_button()`，跳过了登记表）
+	#   ⇒ 那两颗坏了，整条判据照样绿。现在两颗牙：
+	#     ① 样本 = 登记表里**所有**活着的按钮，换主题后**逐颗**比 `fill == fill_expect`；
+	#     ② 两个设备下拉必须**在登记表里**（`_page_btns` 是"换主题会重套"这个集合的真源）。
+	#   漏登记 / 漏重套 / 换成错的色，三种坏法分别当场红。
 	var ok_restyle: bool = false
 	var restyle_skipped: bool = false
 	var restyle_msg: String = ""
-	var probe_btn: Button = null
+	var probes: Array[Button] = []
 	for w in _page_btns:
 		var cb: Button = w.get_ref() as Button
 		if is_instance_valid(cb) and not cb.flat and cb.is_inside_tree():
-			probe_btn = cb
-			break
-	if probe_btn == null:
+			probes.append(cb)
+	var dev_registered: bool = true
+	for d in [_mic_dev_pick, _mic_out_pick]:
+		if is_instance_valid(d) and d.is_inside_tree() and not probes.has(d):
+			dev_registered = false
+	if probes.is_empty():
 		restyle_msg = "登记表里没有活着的页面按钮 ⇒ 这条判据没跑（按不合格处理）"
 	else:
 		GameConfig.apply_preset(GameConfig.DEFAULT_PRESET)
 		GameConfig.bg_brightness = 1.0
 		_apply_appearance()
-		var fill_a: Color = GameConfig.probe_button_theme(probe_btn)["fill"]
+		var fills_a: Array = []
+		for b in probes:
+			fills_a.append(GameConfig.probe_button_theme(b)["fill"])
 		var other: String = ""
 		for pn_r in GameConfig.preset_names():
 			if pn_r != GameConfig.DEFAULT_PRESET:
@@ -3600,14 +4431,19 @@ func _run_appearance_self_test() -> void:
 		else:
 			var ok_apply_r: bool = other != "" and GameConfig.apply_preset(other)
 			_apply_appearance()
-			var pr_r: Dictionary = GameConfig.probe_button_theme(probe_btn)
-			var fill_b: Color = pr_r["fill"]
-			ok_restyle = ok_apply_r and not fill_b.is_equal_approx(fill_a) \
-					and fill_b.is_equal_approx(pr_r["fill_expect"])
-			restyle_msg = "「%s」→「%s」按钮「%s」底色 %s → %s（期望 %s）" % [
-				GameConfig.DEFAULT_PRESET, other,
-				probe_btn.text if probe_btn.text != "" else String(probe_btn.name),
-				str(fill_a), str(fill_b), str(pr_r["fill_expect"])]
+			var r_bad: Array[String] = []
+			var r_changed: int = 0
+			for i in probes.size():
+				var pr: Dictionary = GameConfig.probe_button_theme(probes[i])
+				var fb: Color = pr["fill"]
+				if not fb.is_equal_approx(pr["fill_expect"]):
+					r_bad.append("%s 底色 %s≠期望 %s" % [String(probes[i].name), str(fb), str(pr["fill_expect"])])
+				if not fb.is_equal_approx(fills_a[i]):
+					r_changed += 1
+			ok_restyle = ok_apply_r and r_bad.is_empty() and r_changed > 0 and dev_registered
+			restyle_msg = "「%s」→「%s」｜逐颗 %d 颗（变了 %d 颗）｜设备下拉登记=%s｜异常 %d 处 %s" % [
+				GameConfig.DEFAULT_PRESET, other, probes.size(), r_changed,
+				str(dev_registered), r_bad.size(), str(r_bad.slice(0, 3))]
 	# 复原成默认主题（后面还会写一次自检盘，口径保持一致）
 	GameConfig.apply_preset(GameConfig.DEFAULT_PRESET)
 	GameConfig.bg_brightness = 1.0
@@ -3677,6 +4513,8 @@ static var _apprt_keep: Dictionary = {}
 ## ★★ 它**故意**不走独立路径（测的就是"真配置过一趟对局"）→ **不要把它加进 `regress.sh`**：
 ##    回归是每次改码都跑的，而这条一旦中途崩掉，用户的主题就会留在测试值上。
 ##    只作为**手工排查工具**留着（用户报「配色变回默认」时先跑它，一眼分辨是"没落盘"还是"被谁冲了"）。
+
+
 func _appearance_round_trip_test() -> void:
 	# ★ 从真源挑"非默认主题"，**不许硬编码主题名**：本行原来是 `"黛蓝·深"` —— 主题表改单档
 	#   （2026-10-08）后该名已不存在 ⇒ `apply_preset()` 返回 false、`appearance_preset` 不会变，
@@ -3723,6 +4561,8 @@ func _appearance_round_trip_test() -> void:
 ## 自检（--settest）：设置页分栏布局量化。
 ## 为什么需要：设置页是原生控件，headless 截不了图（dummy 渲染器不发 frame_post_draw），
 ## 而「横向拉太长 / 预览太小」这类问题只有量化尺寸才说得清。等两帧让容器完成布局后读实际 size。
+
+
 func _settings_layout_test() -> void:
 	# ★★ 「自检不许写用户的 user:// 配置」这条纪律的**判据**（2026-09-29 新增）。
 	#    闸在 `GameConfig.save_appearance()` 里（自动化运行 → 改道写自检盘），这里量它有没有生效。
@@ -4272,6 +5112,9 @@ func _settings_layout_test() -> void:
 	get_tree().quit()
 
 ## 自检辅助：取设置页里「屏幕模式」那三个按钮（按文字匹配，避免依赖节点层级）
+
+
+## 自检辅助：取设置页里「屏幕模式」那三个按钮（按文字匹配，避免依赖节点层级）
 func _find_display_buttons() -> Array[Button]:
 	var out: Array[Button] = []
 	var want: Array[String] = [
@@ -4284,6 +5127,9 @@ func _find_display_buttons() -> Array[Button]:
 		if b != null:
 			out.append(b)
 	return out
+
+## 深度优先找按钮文字等于 text 的 Button
+
 
 ## 深度优先找按钮文字等于 text 的 Button
 func _find_bottom_button(node: Node, text: String) -> Button:
@@ -4302,6 +5148,8 @@ func _find_bottom_button(node: Node, text: String) -> Button:
 ## 「第 3 格挂着半透明悬浮预览 + 第 0 格棋子正落到半途」。
 ## 做法与对局盘 `--shotdrop` 一致：把 fade 剩余时长设成半途 + 停掉 `_process`（冻结推进）。
 ## ★ 必须先等两帧：`PreviewBoard` 的多边形是按控件尺寸算的，`_set_page` 那一瞬间 size 还是 0。
+
+
 func _menu_shot_drop() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -4339,6 +5187,8 @@ func _menu_shot_drop() -> void:
 ##   ③ 只改**内存里的视图态**、不写 `user://`：进程退出即消失（同 `--shotitems` 只读不写）。
 ##   ★ 也刻意**不重上色**：勾与本体那对色本就由 `_ink_apply_control()` 上过（那才是被测对象），
 ##     夹具在这里再描一遍就等于"夹具帮忙修好了"。
+
+
 func _menu_shot_check(n: int) -> void:
 	var ctls: Array[Control] = []
 	GameConfig.collect_controls(self, ctls)
@@ -4358,6 +5208,7 @@ func _menu_shot_check(n: int) -> void:
 	print("[shotcheck] 已勾选 %d 个勾选类控件（请求 %d；当前页=%d）：%s" % [
 		hit, n, _page, "、".join(names)])
 
+
 func _click_preview_cell(pb: Control, i: int) -> void:
 	if pb == null or i >= pb._polys.size():
 		return
@@ -4371,50 +5222,73 @@ func _click_preview_cell(pb: Control, i: int) -> void:
 	ev.position = s / float(maxi(poly.size(), 1))
 	pb._gui_input(ev)
 
-## 自检（--boardtest）：棋盘类型切换的折叠/换盘时序。
-## 现在守三件事（都仍有牙齿）：
-##   ① 切换时**先收回**（`_board_target → 0`）、`_sel_board` 暂不落定、`_board_pending` 记住目标；
-##   ② 凹陷态（`_items[i]["selected"]`）**立刻**跟到新块 —— 不等收回动画；
-##   ③ 推进帧之后：切换落定（`_sel_board == other` 且 `_board_pending < 0`）**并且重新展开**
-##      （`_board_t > 0.99`）—— 少了"重新展开"这半，"卡在收回态"（屏幕上少一行选项）
-##      是静默的：`_sel_board` 已经对了，别处一条判据都不会红。
+## 自检（--boardtest）：棋盘下拉 ⇄ 状态（`_sel_board` / `_sel_board_random`）同源，
+## 以及「换盘 ⇒ 大小/种类行的项重建」这条运行期派生链。
+##
+## ★★ 2026-11-06 口径整族重写（§127：口径变了就改判据、不许删）：
+##   棋盘行从"一排瓷砖 + 折叠二级菜单"改成**一个原生下拉**之后，原判据守的对象
+##   （`_board_t` / `_board_pending` / `_board_target` / `_commit_board_pending()` /
+##    `_eff_board()`，以及 `_process` 里那段缓动）**已经整族删除** ——
+##   再去断"先收回再展开"就是给不存在的东西做断言（恒真的闸 = 没闸）。
+##   换成同一件事的新形式，五条各有牙齿：
+##   ① **初始同源**：下拉选中项 == `MenuModel.board_option_index(盘型, 随机位)`；
+##   ② **负对照**：光 `select()` 不许改状态（`select()` 不发 `item_selected`）——
+##      守"下拉只是显示器，真源是 `_sel_*`"；没有这条，①③ 都可以靠"写死显示"骗过；
+##   ③ 走**真实控件信号**换盘：`item_selected.emit()` ⇒ 盘型**与随机位**都跟上
+##      （②③ 成对：一条说"不发信号就不许动"，一条说"发了就必须动"）；
+##   ④ 随机位夹取：筝形 / 爱因斯坦没有随机版 ⇒ 传 true 必须被夹掉，且下拉不许再出现「爱因斯坦随机」；
+##   ⑤ 爱因斯坦 ⇒ 大小行语义翻成"种类"：项数 = `MenuModel.hat_slots()`，切回普通盘
+##      必须换回尺寸三档，**且选中项跟着回去**（只验单向时"回程卡住"测不到）。
 func _board_fold_test() -> void:
 	_set_page(PAGE_MAIN)
 	_layout_setup()
-	for i in 60:                       # 先让初始状态稳定（默认棋盘的展开/收回走到头）
-		_process(1.0 / 60.0)
-	var start: int = _sel_board
-	var other: int = BOARD_CUBE if start != BOARD_CUBE else BOARD_PENROSE
-	# ① 点击另一棋盘：应立刻进入收回（target=0），锚点暂不变，但选中态已跟随
-	_select_board(other)
-	var ok_hold: bool = (_board_target < 0.001) and (_sel_board == start) and (_board_pending == other)
-	var ok_stone: bool = _selected_board_label() == _board_label(other)
-	# ② 推进帧：收完 → 换锚点 → 重新展开。
-	#    ⚠️ 帧数要给足（180 ≈ 3s）：最坏情形是 收回0.3s + 展开0.3s，再算上缓动的尾段，
-	#       给一倍余量以免把"慢"误报成"坏"（这条余量是滑行时代留下的，现在更宽裕，不必收）。
-	for i in 180:
-		_process(1.0 / 60.0)
-	var ok_done: bool = (_sel_board == other) and (_board_pending < 0) and (_board_t > 0.99)
-	# ③ 再切回去：同一条时序链必须**双向**成立（只验一个方向时"回程卡住"测不到）
-	_select_board(start)
-	var ok_hold2: bool = (_board_target < 0.001) and (_sel_board == other)
-	for i in 180:
-		_process(1.0 / 60.0)
-	var home_x: float = _find_center("board", _board_label(start)).x
-	var ok_back: bool = (_sel_board == start) and (_board_pending < 0) and (_board_t > 0.99)
-	var ok: bool = ok_hold and ok_stone and ok_done and ok_hold2 and ok_back
-	print("[boardtest] %s→%s→%s：先收回=%s 凹陷态跟随=%s 到位后再展开=%s 回程同序=%s 末态t=%.2f 落位x=%.0f %s" % [
-		_board_label(start), _board_label(other), _board_label(start), ok_hold, ok_stone,
-		ok_done, ok_back, _board_t, home_x,
+	# 固定起点：彭罗斯 + 非随机（自检不许依赖上一次运行留下的选择）
+	_select_board_pair(BOARD_PENROSE, false)
+	var idx0: int = MenuModel.board_option_index(_sel_board, _sel_board_random)
+	var has_board_opt: bool = _board_opt != null and is_instance_valid(_board_opt)
+	var ok_sync: bool = has_board_opt and _board_opt.selected == idx0
+	# ② 负对照：`select()` 只改显示，不许改状态
+	var idx_cube: int = MenuModel.board_option_index(BOARD_CUBE, true)
+	if has_board_opt:
+		_board_opt.select(idx_cube)
+	var ok_nosig: bool = _sel_board == BOARD_PENROSE and not _sel_board_random
+	# ③ 真选：走控件自己的信号（与用户点选同一条链）
+	if has_board_opt:
+		_board_opt.item_selected.emit(idx_cube)
+	var ok_cube: bool = _sel_board == BOARD_CUBE and _sel_board_random
+	# ④ 随机位夹取：筝形 / 爱因斯坦都没有随机版 ⇒ 传 true 必须被 `board_has_random()` 吃掉。
+	#   ★ 2026-11-07 追加爱因斯坦：菜单里那一项已删，但**旧配置 / 旧棋谱 / 手改文件**
+	#     仍可能把 `random=true` 送进来；不夹就会让下拉去选一个不存在的下标。
+	#   ★ 顺带直接量下拉项文本：谁把「爱因斯坦随机」加回清单，本条必须当场报红。
+	_select_board_pair(BOARD_KITE, true)
+	var ok_clamp_kite: bool = _sel_board == BOARD_KITE and not _sel_board_random
+	_select_board_pair(BOARD_HAT, true)
+	var ok_clamp_hat: bool = _sel_board == BOARD_HAT and not _sel_board_random \
+		and has_board_opt and _board_opt.selected == MenuModel.board_option_index(BOARD_HAT, false)
+	var hat_random_item: bool = false
+	if has_board_opt:
+		for i in _board_opt.item_count:
+			if _board_opt.get_item_text(i) == "爱因斯坦随机":
+				hat_random_item = true
+	var ok_clamp: bool = ok_clamp_kite and ok_clamp_hat and not hat_random_item
+	# ⑤ 语义翻 + 回程
+	#   ★ 先回彭罗斯再切爱因斯坦：④ 末尾已经停在 HAT，直接切会被"状态没变就早退"吃掉，
+	#     ⑤ 就退化成一条没有真实换盘动作的恒真断言（§106 有效分母）。
+	_select_board_pair(BOARD_PENROSE, false)
+	_select_board_pair(BOARD_HAT, false)
+	var hat_n: int = _size_opt.item_count if _size_opt != null and is_instance_valid(_size_opt) else -1
+	var ok_hat: bool = hat_n == MenuModel.hat_slots().size()
+	_select_board_pair(BOARD_PENROSE, false)
+	var pen_n: int = _size_opt.item_count if _size_opt != null and is_instance_valid(_size_opt) else -1
+	var pen_idx: int = MenuModel.size_slots().find(_sel_size)
+	var ok_back: bool = pen_n == MenuModel.size_slots().size() \
+			and _size_opt != null and is_instance_valid(_size_opt) and _size_opt.selected == pen_idx
+	var ok: bool = ok_sync and ok_nosig and ok_cube and ok_clamp and ok_hat and ok_back
+	print("[boardtest] 下拉⇄状态 初始同源=%s 负对照=%s 真信号换盘=%s 夹取筝=%s 夹取爱=%s 无爱随机项=%s 帽子项=%d 回程项=%d 回程选中=%d ｜ 结论 %s" % [
+		ok_sync, ok_nosig, ok_cube, ok_clamp_kite, ok_clamp_hat, not hat_random_item, hat_n, pen_n,
+		_size_opt.selected if _size_opt != null and is_instance_valid(_size_opt) else -99,
 		"通过 ✓" if ok else "失败 ✗"])
 	get_tree().quit()
-
-## 当前被选中的棋盘类型文字（自检用：验证凹陷态是否立即跟到新块）
-func _selected_board_label() -> String:
-	for it in _items:
-		if it["group"] == "board" and bool(it["selected"]):
-			return it["label"]
-	return ""
 
 ## 二级行（group "boardsize"）三瓣当前的标签，按槽位顺序（自检用）。
 ## 注意这一行有**两种含义**（普通棋盘=大小三档 / 爱因斯坦=种类三档），所以自检不能按字面断言，
@@ -4513,9 +5387,6 @@ func _build_appearance_group(root: VBoxContainer) -> void:
 	_cursor_val = _ui_label(_cursor_size_text(), 18)
 	sz_row.add_child(_ui_label("指针大小")); sz_row.add_child(_cursor_sl); sz_row.add_child(_cursor_val)
 	root.add_child(sz_row)
-	# ⚠️ 说明文字是 **Label**（不解析 Markdown）—— 写 `**强调**` 会原样把星号画出来（截图实测踩过）；
-	#    另外这一行会挤在内容列宽度里，太长会被右侧裁掉（竖屏 520px 列宽下尤其明显）。
-	root.add_child(_ui_label("关闭时用系统箭头。Windows 上不随系统缩放变大，高分屏建议选大档", 14))
 	# ★ 三样东西（开关状态 / 滑条档位 / 数值文案）的初值，加上「关掉就不能拖」这条联动，
 	#   全部由 `_sync_cursor_controls()` **同一套判据**派生 —— 分开写三处迟早漏一处，
 	#   症状是"关了还能拖、拖了却没反应"（不报错的静默失效）。
@@ -4536,7 +5407,6 @@ func _on_cursor_toggled(on: bool) -> void:
 	GameConfig.mark_appearance_dirty()      # 用户操作 ⇒ 置脏（第 0 步）
 	GameConfig.save_appearance()
 	_sync_cursor_controls()
-	_tip("自定义指针：%s" % ("开" if GameConfig.cursor_enabled else "关（系统箭头）"))
 
 ## 「指针大小」滑条。★ 收到的 v 是**档位下标**（0..3），不是像素。
 ## 幂等守卫同 `_on_cursor_toggled()`：同步赋值会发 `value_changed`，值没变就别动。
@@ -5287,10 +6157,8 @@ func _menu_layout_self_test() -> void:
 	#   ⇒ 判据会一路报"无候选"，看起来像布局没做出来，**实际是动画没走完**。
 	#   既有自检早就踩过同一个坑（`--steamuitest` 里那句「折叠动画必须收完，
 	#   否则命中测试按 `_net_t<0.99` 直接跳过」）。这里一次性全部置到位。
-	_board_t = 1.0
 	_set_page(PAGE_MAIN)          # 自检起点：默认页的取值点必须在**这句之前**（守卫 S66）
 	# `_set_page` 会把几个 `_target` 重新按选择算一遍；进度也要跟上，否则又回到 0
-	_board_t = 1.0
 
 	# ---- ① 底部一行四入口都在、都可点、且互不重叠 ----
 	#   四入口 = 练习 / 棋谱 / 对弈 / 设置（**四个面板都注册同一份**，见
@@ -5412,8 +6280,18 @@ func _menu_layout_self_test() -> void:
 		#   ⚠️ 这一条**改成了精确计数**（`>= 6` 换成实际值），与上面"留一点余量"的口径相反
 		#     —— 理由：块数降到 6 之后"余量"就没有意义了（余量就是"允许少一块"，而少一块
 		#     正是本条要抓的那种坏法）。本条守的仍是「**别一块都不建 / 别只建一半**」。
-			#     ⇒ 将来再加行：**先看这里红不红**，红了就把数字与这一段一起更新（别放宽）。
-		var c2b: bool = came_back and setup_bad.is_empty() and want_rows == 14
+		#   ★★ 2026-11-06b：棋盘行**整族搬出 `_items`**（改成原生下拉 `_board_opt`）⇒ 15 → **9 块**
+		#     （9 = 三大小 + 五对战方式 + 开始；棋盘那 6 块不再进 `_items`）。
+		#     照例当场变红、按设计更新数字。⚠️ 这条现在数的**只剩瓷砖**：下拉的可点性/落位
+		#     由 `--labeltest` 调 `_board_static_test()` 单独量（行带内含 / 居中 / 不越界），
+		#     两条判据合起来才等于原来的覆盖面 —— 别只看这一条就以为棋盘行没人守。
+		#   ★★ 2026-11-07：大小行 / 对战方式行**也改成原生下拉** ⇒ 9 → **1 块**
+		#     （只剩「开始」）。同一条逻辑第三次兑现：改结构 ⇒ 这里必须跟着改数字，
+		#     红了不是"放宽阈值"，而是"分母变了，把这段一起更新"。
+		#     ⚠️ 现在这条判据守的是「**开始块在位且点得到**」+「回调切得回来」两件事；
+		#       三行下拉的落位全在 `_board_static_test()`（三个下拉 + 多视口）。
+		#     ⇒ 将来再加行：**先看这里红不红**，红了就把数字与这一段一起更新（别放宽）。
+		var c2b: bool = came_back and setup_bad.is_empty() and want_rows == 1
 		checks.append(["②b 练习面板｜回调切得回来且设置区在位可点", c2b,
 			"回到主菜单=%s · 设置区 %d 块 · 异常 %s" % [str(came_back), want_rows,
 				str(setup_bad.slice(0, 3))]])
@@ -5446,49 +6324,49 @@ func _menu_layout_self_test() -> void:
 	#      当年是**故意**写成"锚点 + (槽心 − 锚点)"的（等价于直接用槽心）。现在直接用锚点，
 	#      量的仍然是"用户看到并点下去的那一块"——不变的是那条纪律，不是那个中间变量。
 	var board_before: int = _sel_board
-	# ★★ 量的是 **`_eff_board()`**（用户当前看到的棋盘）而不是 `_sel_board`：
-	#   `_select_board()` 走的是**待切换机制** —— 设 `_board_pending`、收回动画，
-	#   `_sel_board` 要等 `_commit_board_pending()`（点"开始"或切页）才落定。
-	#   这是有意设计（凹陷态立即跟到新块、折叠锚点仍用旧块，见该函数注释）。
-	#   ⇒ 判据若读 `_sel_board`，量的是"内部状态"而不是"用户看到的"——
-	#   而且会恒红（点了不换），读起来像"接线坏了"，实际是量错了对象。
-	var eff_before: int = _eff_board()
+	# ★ 「用户切换之前看到的那张盘」—— ③ 与 ④ 共用同一个快照点（④ 比"变了没有"）。
+	var eff_before: int = _sel_board
+	# ★★ 2026-11-06 口径换新：棋盘行已经不是瓷砖了（改原生下拉）⇒ "点瓷砖命中 + 回调"
+	#   这条路不存在；换成**下拉自己的 `item_selected` 信号**（同样是真实入口 ——
+	#   直呼 `_select_board()` 测不到"信号有没有接上"，而"下拉没接线"正是"选了没反应"）。
+	#   ⚠️ 期望值仍不另写映射表：独立于实现的期望是 ——「换一项之后 `_sel_board` 必须变」。
 	var c3: bool = false
-	var c3msg: String = "无可切目标"
-	# 找一块**当前没选中**的棋盘（点已选中的块不会改变 `_sel_board` ⇒ 样本平凡）
-	# ★★ 字段名是 **`selected`** 不是 `sel` —— `descriptors` 里用 `sel` 写，
-	#   进 `_items` 时被映射成 `selected`（见 `for d in descriptors:` 那段）。
-	#   读错字段名的症状极隐蔽：**所有项都被当成"未选中"** ⇒ 挑中列表里的第一个
-	#   （恰好就是当前选中的那块）⇒ 点它不变 ⇒ 判据永远红，且看不出哪里错。
-	var tgt_item: int = -1
-	for i in _items.size():
-		if str(_items[i]["group"]) == "board" and not bool(_items[i].get("disabled", false)) \
-				and not bool(_items[i].get("selected", false)):
-			tgt_item = i
-			break
-	if tgt_item < 0:
-		c3msg = "没有未选中的棋盘（样本平凡）"
-	else:
-		# ★ 静态平铺：这一块在屏上**只出现一次**，它的 `center` 就是命中点
-		#   （与 `_draw()` 的画点、`_tile_at_point()` 的判点**同源**）。
-		var tgt_pt: Vector2 = _items[tgt_item]["center"]
-		var got2: int = _tile_at_point(tgt_pt)
-		if got2 >= 0 and not bool(_items[got2].get("disabled", false)):
-			(_items[got2]["cb"] as Callable).call()
-			c3 = _eff_board() != eff_before
-			c3msg = "点 #%d（%s）前=%d 后=%d（_sel=%d pending=%d）" % [
-				got2, str(_items[got2]["label"]), eff_before, _eff_board(),
-				_sel_board, _board_pending]
+	var c3msg: String = "下拉不存在"
+	if _board_opt != null and is_instance_valid(_board_opt):
+		if _board_opt.item_count < 2:
+			c3msg = "下拉只有 %d 项（样本平凡）" % _board_opt.item_count
 		else:
-			c3msg = "命中 #%d 不可点" % got2
-	checks.append(["③ 展开后换棋盘走真实命中+回调", c3, c3msg])
+			# 挑一个**盘型与当前不同**的选项（选同一张盘时 `_sel_board` 不变 ⇒ 样本平凡）
+			# ★ 刻意挑"不同盘型"而不是"同类盘的随机版"：④ 要量"背景跟着换盘"，
+			#   而随机版与固定版是**同一张盘**（背景本来就是同一张密铺，不该变）。
+			var other_i: int = -1
+			for oi in _board_opt.item_count:
+				if int(MenuModel.board_option_at(oi)["board"]) != _sel_board:
+					other_i = oi
+					break
+			if other_i < 0:
+				c3msg = "下拉里没有「另一张盘」的选项（样本平凡）"
+			else:
+				var board_bak: int = _sel_board
+				var rand_bak: bool = _sel_board_random
+				_board_opt.select(other_i)
+				_board_opt.item_selected.emit(other_i)
+				var want: Dictionary = MenuModel.board_option_at(other_i)
+				var match_want: bool = _sel_board == int(want["board"]) \
+					and _sel_board_random == bool(want["random"])
+				var changed: bool = _sel_board != board_bak or _sel_board_random != rand_bak
+				c3 = match_want and changed
+				c3msg = "下拉切到 #%d「%s」后 board=%d random=%s（期望 %d/%s）" % [
+					other_i, MenuModel.board_option_label(int(want["board"]), bool(want["random"])),
+					_sel_board, str(_sel_board_random), int(want["board"]), str(want["random"])]
+	checks.append(["③ 棋盘下拉换盘走真实信号｜状态与随机位一起落", c3, c3msg])
 
 	# ---- ④ 背景棋盘随选择联动（换棋盘后背景盘形要重画）----
 	#   判据读**背景真源**（`_menu_bg_board`），不读"有没有重画"
 	#   ——后者在"总是 queue_redraw"时恒真。
-	# ★ 比的是 `_eff_board()`：与 ③ 同一个口径（"用户看到的那个"）。
+	# ★ 比的是 `_sel_board`：与 ③ 同一个口径（"用户看到的那个"）。
 	var bg_after: int = int(_menu_bg_board)
-	var eff_after: int = _eff_board()
+	var eff_after: int = _sel_board
 	var c4: bool = bg_after == eff_after and bg_after != eff_before
 	checks.append(["④ 背景棋盘随选择联动", c4,
 		"背景=%d 用户看到=%d（切换前 %d）" % [bg_after, eff_after, eff_before]])
@@ -5744,9 +6622,10 @@ func _menu_layout_self_test() -> void:
 	#     快照点放在**真正改选择之前**（那时 `_set_page()` 已经落定过 `_board_pending`）。
 	var ref_bad: Array[String] = []
 	var ref_samples: int = 0
+	# ★ 2026-11-06：清单项不再有 `enabled` 键（占位项整族删除），改判"id 与当前不同"。
 	var alt_b: int = -1
-	for kb in BOARD_KINDS:
-		if bool(kb["enabled"]) and int(kb["id"]) != _eff_board():
+	for kb in MenuModel.board_options():
+		if int(kb["id"]) != _sel_board:
 			alt_b = int(kb["id"])
 			break
 	if alt_b < 0:
@@ -5760,18 +6639,15 @@ func _menu_layout_self_test() -> void:
 		if n1 != 1:
 			ref_bad.append("刷新后底栏亮 %d 块（应恰好 1）" % n1)
 		var sb_save: int = _sel_board
-		var bp_save: int = _board_pending
-		var bt_save: float = _board_target
-		_select_board(alt_b)                 # ② 真实路径：点另一块棋盘
+		var sr_save: bool = _sel_board_random
+		_select_board(alt_b)                 # ② 真实路径：换一张盘（下拉回调也走它）
 		ref_samples += 1
 		var lit2: Array[int] = _nav_lit_indices()
 		var lbl2: String = str(_items[lit2[0]]["label"]) if lit2.size() == 1 else ""
 		if lit2.size() != 1 or lbl2 != "练习":
 			ref_bad.append("换到「%s」后底栏亮 %d 块（亮的是「%s」，应恰好 1 块且是「练习」）" % [
 				_board_label(alt_b), lit2.size(), lbl2])
-		_sel_board = sb_save                  # 还原选择（连同折叠目标）——不漏状态给后面
-		_board_pending = bp_save
-		_board_target = bt_save
+		_select_board_pair(sb_save, sr_save)   # 还原选择 —— 不漏状态给后面
 		_refresh_selection()
 	var c5b2: bool = ref_bad.is_empty() and ref_samples == 2
 	checks.append(["⑤b2 换棋盘刷新后底栏仍恰好一块亮着", c5b2,
@@ -6716,81 +7592,63 @@ func _menu_layout_self_test() -> void:
 	#   ★ 高亮**断恰好一块 + 断它的名字**：只断"有没有亮"的话，「全不亮」与「全亮」
 	#     都能溜过去（铁律 §68：别把"没量到"印成满分证据）。
 	var mode_bak14: int = _sel_mode
-	# ★★ 2026-10-15b：样本改成**从真源现取**（`_items` 里 group == "mode" 的全部瓷砖），
-	#   不再硬编码清单。⚰️ 改前写死 `["本地", "人机"]` —— 本行加/改一块（本轮「人机」→「磐石」
-	#   且并列化）就必须记得改那一行；漏改时症状有两档，**坏的那一档是静默的**：
-	#   清单比实际少一块 ⇒ 少掉的那块**永远不被点一次**（射程静默变短，判据照样绿）。
-	#   每块带 `label` + `mode_id` 两样：`label` 用来点它（与用户点的是同一块瓷砖）、
-	#   `mode_id` 用来断"点它之后 `_sel_mode` 该等于什么" —— **不另立一张映射表**（§78）。
-	var tiles14: Array = []
-	for it16 in _items:
-		if str(it16["group"]) == "mode":
-			tiles14.append({"label": str(it16["label"]), "id": int(it16.get("mode_id", -1))})
-	# 读「对战方式」行此刻高亮着哪些标签（只按 group 筛，不带任何位置/顺序假设）
-	var read_lit := func() -> Array:
-		var l_mode: Array[String] = []
-		for it14 in _items:
-			if str(it14["group"]) != "mode" or not bool(it14["selected"]):
-				continue
-			l_mode.append(str(it14["label"]))
-		return l_mode
-	# 点「对战方式」行某块瓷砖的**真实回调**（与用户点的是同一个 Callable）
-	var click_mode_tile := func(lbl: String) -> bool:
-		for it15 in _items:
-			if str(it15["group"]) == "mode" and str(it15["label"]) == lbl:
-				(it15["cb"] as Callable).call()
-				return true
-		return false
+	_set_page(PAGE_MAIN)
+	# ★★ 2026-11-07：对战方式行改成**原生下拉**（`_mode_opt`）⇒ 靶子换形式、判据不许删（§127）。
+	#   原来那两颗牙落到下拉上：
+	#     ① 「点了谁就只剩谁」—— 下拉的 `selected` 必须落在刚点的那个下标上
+	#        （瓷砖版是"恰好亮一块"；下拉天然单选，但"信号没接线"时 `selected` 照样不动 ⇒ 仍咬得住）；
+	#     ② 「`_sel_mode` == 该项声明的档」—— 防"显示对了、状态没动"，也就是 2026-10-15b 那个
+	#        父子写法（点疾风却落成磐石档）的同型坏法。
+	#   ★ 两条都**走控件自己的信号**（`item_selected.emit`，与用户点选同一条链），
+	#     不许自己调 `_select_mode()` 再断言 —— 那是"判据自己先调一次被测函数"（铁律 4）。
+	#   ★ 样本**从真源现取**（`_mode_opt_values()` + `_mode_label()`），不硬编码清单：
+	#     清单比实际少一项时，少掉的那项**永远不被点一次**（射程静默变短、判据照样绿）。
+	var vals14: Array = _mode_opt_values()
+	var has_opt14: bool = _mode_opt != null and is_instance_valid(_mode_opt)
 	var e14: Array[String] = []
 	var covered14: Array[String] = []
-	if tiles14.size() < 2:
-		# 取不到样本 ⇒ 早退并**报红**（铁律 13⑨：对空集合的判据恒真 = 没测）
-		e14.append("「对战方式」行只取到 %d 块瓷砖 —— 样本不足，本条不作数" % tiles14.size())
-	for i14 in tiles14.size():
-		var want_lbl14: String = str(tiles14[i14]["label"])
-		var want_id14: int = int(tiles14[i14]["id"])
-		# ★ 每次先把 `_sel_mode` 设成**另一块**（不是设成它自己）—— 设成它自己就成了恒真式：
-		#   "点了没反应"与"点对了"在屏幕上完全一样。
-		_sel_mode = int(tiles14[(i14 + 1) % tiles14.size()]["id"])
-		_set_page(PAGE_MAIN)
-		if not click_mode_tile.call(want_lbl14):
-			e14.append("找不到「%s」瓷砖，标签被改名了？（_items 里明明列出了它）" % want_lbl14)
-			continue
+	if not has_opt14:
+		e14.append("没有对战方式下拉（_mode_opt）—— 样本不足，本条不作数")
+	elif _mode_opt.item_count != vals14.size():
+		e14.append("下拉项数 %d ≠ 档位表 %d（标签与值不同源）" % [
+			_mode_opt.item_count, vals14.size()])
+	for i14 in vals14.size():
+		if not has_opt14:
+			break
+		var want_id14: int = int(vals14[i14])
+		var want_lbl14: String = _mode_label(want_id14)
+		# 先把状态挪到**另一档**（设成它自己就成了恒真式："点了没反应"与"点对了"看不出区别）
+		_sel_mode = int(vals14[(i14 + 1) % vals14.size()])
+		_mode_opt.item_selected.emit(i14)
 		covered14.append(want_lbl14)
-		var lit14: Array = read_lit.call()
-		# ★★ 这一条就是本轮口令的**回归牙齿**：「并列」= 点一块只亮一块。
-		#   ⚰️ 并列化之前点「疾风」会亮【疾风, 磐石（旧称人机）】两块 ⇒ 这里当场红。
-		if lit14.size() != 1 or str(lit14[0]) != want_lbl14:
-			e14.append("点「%s」⇒ 高亮 %s（应恰好一块、且是「%s」）" % [
-				want_lbl14, str(lit14), want_lbl14])
-		# ★ 第二条：`_sel_mode` 必须落成**这块瓷砖自己声明的身份**（不是"父档"）。
-		#   ⚰️ 并列化之前点「疾风」会落 `MODE_VS_AI`(1) 而不是 `MODE_XGAI`(100) ⇒ 这里当场红。
 		if _sel_mode != want_id14:
-			e14.append("点「%s」⇒ _sel_mode=%d（应 %d）—— 标签与状态不同源" % [
+			e14.append("选「%s」⇒ _sel_mode=%d（应 %d）—— 下拉与状态不同源" % [
 				want_lbl14, _sel_mode, want_id14])
-	# ★★ 并列契约本身：这两块必须**都在**、且是**两个不同的名字**（不是塌成同一块）。
-	#   ⚠️ **射程说清楚**（本轮用刀量出来的，别说成比实际更多）：本段两边**同源**
-	#      （`_mode_label()` 与建瓷砖时用的是同一条链）⇒ 它**只能**抓"两个档取了同一个名字"
-	#      这种塌缩，**抓不到"改名字却漏改了一处"**。那件事由 `--labeltest` 的 ⓪ 段负责
-	#      —— 那边用的是**独立字面量**（模拟脚本/人按名字找瓷砖），才是跨实现的对拍。
-	#      两段分工不同，都要留（§11 探针/判据分工）。
+		if _mode_opt.selected != i14:
+			e14.append("选「%s」⇒ 下拉停在第 %d 项（应 %d）—— 信号没接线" % [
+				want_lbl14, _mode_opt.selected, i14])
+	# ★★ 并列契约本身：这两档必须**都在**下拉里、且是**两个不同的名字**（不是塌成同一项）。
+	#   ⚠️ 射程照旧说清：本段两边**同源**（`_mode_label()` 与建项处同一条链）⇒ 它只能抓
+	#     "两个档取了同一个名字"这种塌缩，抓不到"改名漏改一处" —— 那由 `--labeltest` ⓪ 负责。
 	var lbl_pan14: String = _mode_label(MODE_VS_AI)
 	var lbl_xg14: String = _mode_label(MODE_XGAI)
-	var has_lbl14 := func(s: String) -> bool:
-		for t16 in tiles14:
-			if str(t16["label"]) == s:
+	var in_opt14 := func(s: String) -> bool:
+		if not has_opt14:
+			return false
+		for k14 in _mode_opt.item_count:
+			if _mode_opt.get_item_text(k14) == s:
 				return true
 		return false
-	if lbl_pan14 == lbl_xg14 or not has_lbl14.call(lbl_pan14) or not has_lbl14.call(lbl_xg14):
-		e14.append("「%s」与「%s」未同时存在、或取了同一个名字 —— 并列契约被破坏" % [
+	if lbl_pan14 == lbl_xg14 or not in_opt14.call(lbl_pan14) or not in_opt14.call(lbl_xg14):
+		e14.append("「%s」与「%s」未同时出现在下拉里、或取了同一个名字 —— 并列契约被破坏" % [
 			lbl_pan14, lbl_xg14])
 	_sel_mode = mode_bak14
 	_set_page(PAGE_MAIN)
-	# ⚠️ 有效分母（铁律 §106）：本行至少 3 块（本地 / 磐石 / 疾风），且**每一块**都真被点过一次。
-	#   少到 0 会让判据恒真（铁律 13⑨）；少一块则那一块永远不被点 —— 射程静默变短。
-	var c14: bool = e14.is_empty() and tiles14.size() >= 3 \
-		and covered14.size() == tiles14.size()
-	checks.append(["⑭ 对战方式行：点一块恰好亮那一块｜走真实回调", c14,
+	# ⚠️ 有效分母（铁律 §106）：档位表至少 3 档，且**每一档**都真被选过一次。
+	#   少到 0 会让判据恒真（铁律 13⑨）；少一档则那一档永远不被验 —— 射程静默变短。
+	var c14: bool = e14.is_empty() and vals14.size() >= 3 and has_opt14 \
+		and covered14.size() == vals14.size()
+	checks.append(["⑭ 对战方式行：选一项就落那一项｜走真实控件信号", c14,
 		"覆盖 %s · 异常 %d 处 %s" % [str(covered14), e14.size(), str(e14.slice(0, 3))]])
 
 	# ---- ⑮ 页面原生按钮的**主题接线**（2026-10-15）----
@@ -8528,6 +9386,25 @@ func _clear_settings_ui() -> void:
 	if _settings_root != null and is_instance_valid(_settings_root):
 		_settings_root.queue_free()
 		_settings_root = null
+	# ★★ 调试用的 `VoiceChat` 必须**一起收摊**（2026-11-01）：它握着麦克风 —— 那是引擎级资源，
+	#   不随控件树释放。不收的话"进设置页看一眼电平"就等于让麦克风一直开着，
+	#   玩家完全看不到、也没有任何提示。这类事情在隐私上是零容忍的。
+	if _mic_voice != null and is_instance_valid(_mic_voice):
+		_mic_voice.shutdown()
+		_mic_voice.queue_free()
+	_mic_voice = null
+	# 控件引用一并清空：它们是**旧树**里的节点，留着只会在下一 tick 摸到已 free 的对象
+	#（`_tick_mic_debug()` 虽然判了 `is_instance_valid`，但"引用还在"本身就会让
+	#  "设置页有没有建过"这类判断出错）。
+	_mic_status = null
+	_mic_bar = null
+	_mic_vad_val = null
+	_mic_dev_pick = null
+	_mic_out_pick = null
+	_mic_mon_btn = null
+	_mic_dev_names.clear()
+	_mic_out_names.clear()
+	_mic_status_text = ""
 
 # ====== 棋谱库面板（原生控件，非瓷砖）======
 # ★★ 与设置面板**同一套纪律**（照 `_build_settings_ui()` 抄的，逐条理由见那边）：
@@ -9341,24 +10218,21 @@ func _tile_hw_row(r_base: float, labels: Array, fs: int) -> float:
 func _main_row_roster() -> Dictionary:
 	var cnts: Array = []
 	var labels: Array = []
-	# ① 棋盘行：顺序与条目全部来自 `BOARD_KINDS`（与 `_set_page` 同一真源），只数**启用**项
-	var n_board := 0
-	for kind in BOARD_KINDS:
-		if not bool(kind["enabled"]):
-			continue              # 禁用占位不上屏（「敬请期待①②」）
-		n_board += 1
-		labels.append(str(kind["label"]))
-	cnts.append(n_board)
-	# ② 大小行：三个槽位，标签随选中棋盘变（两种含义都恰好 3 槽，见 `_set_page`）
-	for slot in [GameConfig.RANDOM, GameConfig.STANDARD, GameConfig.ENHANCED]:
-		labels.append(_size_slot_label(slot))
-	cnts.append(3)
-	# ③ 对战方式行：本地 / 磐石 / 疾风 / 流水（顺序与 `_set_page` 的 append 顺序一致）
-	#   ⚠️ 加档必须同步这里 —— `--labeltest` 的 [花名册] 段按「块数序列」对拍，
-	#      本行少写一块就当场红（2026-10-22 加「流水」时正是这样被逮住的）。
-	for m in [MODE_LOCAL, MODE_VS_AI, MODE_XGAI, MODE_LIUSHUI]:
-		labels.append(_mode_label(m))
-	cnts.append(4)
+	# ① 棋盘行：**0 块瓷砖** —— 2026-11-06 起它是一个原生下拉（`_board_opt`），
+	#   不进 `_items`。这里记 0 是为了让 `_tile_uniform_box()` 把它当"该行没有瓷砖"
+	#   （它内部 `if cnt < 2: continue`，0 不会参与间距预算），
+	#   也让 `--labeltest` 的 [花名册] 与真实 `_items` 分组计数对得上。
+	#   ⚠️ 别删这一条：`cnts`/`labels` 是**按行下标**对齐的两个数组，少一条会让后面
+	#     所有行的花名册整体错位一格（症状是"底栏四块宽度悄悄变了"）。
+	cnts.append(0)
+	# ②③ 大小行 / 对战方式行：**都是 0 块瓷砖** —— 2026-11-07 起两者也改成原生下拉
+	#   （`_size_opt` / `_mode_opt`）。三行（棋盘 / 大小 / 对战方式）在这里各记一条 0，
+	#   **不能省**：`cnts`/`labels` 是**按行下标**对齐的两个数组，少一条后面全部错位一格
+	#   （症状是"底栏四块宽度悄悄变了"，而每个面板内部自洽 ⇒ 几何判据照样绿）。
+	#   ★ 大小行的**语义**（尺寸三档 ↔ 帽子种类）现在由 `_rebuild_size_opt_items()` 在
+	#     换盘时重建；对战方式的档位表由 `_mode_opt_values()` 给出 —— 两边都不再经过花名册。
+	cnts.append(0)
+	cnts.append(0)
 	# ④ 开始行（无行标题，单块）
 	labels.append("开始")
 	cnts.append(1)
@@ -9539,9 +10413,11 @@ func _layout_setup() -> void:
 	# 布局函数必须自己保证幂等：先清空再填充。
 	_row_label_y.clear()
 	_section_labels.clear()
+	_row_bands.clear()          # 行带矩形（棋盘下拉的落位判据读它，见 `_board_static_test`）
 	for gi in groups.size():
 		var g: String = groups[gi]
 		var bandTop := top0 + (bandH + bandGap) * float(gi)
+		_row_bands[g] = Rect2(0.0, bandTop, size.x, bandH)
 		var row_items: Array[Dictionary] = []
 		for it in _items:
 			if it["group"] != g:
@@ -9554,7 +10430,12 @@ func _layout_setup() -> void:
 				continue
 			row_items.append(it)
 		var cnt := row_items.size()
-		if cnt == 0:
+		# ★ 2026-11-06：`board` 组现在**没有** `_items` 条目（棋盘行改原生下拉）⇒ 不能在这里
+		#   直接 `continue`，否则连行标题「棋盘」都不会记，那一行整条带都空着。
+		# ★ 2026-11-07：`board` / `boardsize` / `mode` 三行现在都**没有瓷砖**（全是下拉）⇒
+		#   不能在这里 `continue`，否则连行标题都不会记，那三行整条带都空着。
+		var row_opt: OptionButton = _menu_opt_of(g)
+		if cnt == 0 and row_opt == null:
 			continue
 		var label_txt: String = {"board": "棋盘", "boardsize": _size_row_title(),
 			"mode": "对战方式", "action": ""}.get(g, "")
@@ -9571,6 +10452,12 @@ func _layout_setup() -> void:
 			# 折叠动画开始后标题会残留在原地，与展开出的折叠瓣/锚点标签重叠。
 			# 字号随行高自适应，矮行用小字号，避免标题压到瓷砖标签（见 _row_head_font_size）。
 			_section_labels.append({"text": label_txt, "y": row_label_y, "group": g, "fs": hfs})
+		if row_opt != null:
+			# ★★ 2026-11-06/07：这三行各是**一个原生下拉**，没有瓷砖可排 ⇒ 摆好就走下一行。
+			#   行标题已经在上面记进 `_section_labels`，所以下拉的纵向位置要用
+			#   `_row_center_y()`（与瓷砖行同一个口径），否则换字号/换行高会一眼看出错位。
+			_place_menu_opt(row_opt, _row_center_y(bandTop, bandH, label_txt != ""), bandH)
+			continue
 		# ★★ 2026-10-16：**本行不再有任何专用分支** —— 原先顺序是
 		#   ① `if g == "board": _layout_board_row(...)`（循环轮播，整族已删）；
 		#   ② 再按 `action` / 其它分两档半径（「开始」走 `by_h_act` 放大一档）。
@@ -10512,9 +11399,9 @@ func _collect_buttons(node: Node, out: Dictionary) -> void:
 		_collect_buttons(c, out)
 
 ## 鼠标点落在哪块瓷砖上（返回 _items 下标；-1 = 没点中）。
-## 棋盘行是循环行：同一块可能同时出现多次 → 必须逐**槽位**判，不能再用 it["poly"] ——
-## 那只代表「离焦点最近的那次出现」，点在别处的重影上会答错。
-## 低于该透明度的重影不响应点击：看得见却点不到会怪，所以取一个较宽松的阈值。
+## ★★ 2026-11-06：棋盘行已改成原生下拉（**不在 `_items` 里**）⇒ 本函数只服务剩下的
+## 瓷砖行（大小 / 对战方式 / 开始 / 底栏）；棋盘的选择走 `OptionButton` 自己的信号。
+## 历史：循环行时代"同一块出现多次、按槽位判"那套已随静态平铺与下拉两次简化一起消失。
 func _tile_at_point(p: Vector2) -> int:
 	for i in _items.size():
 		var it: Dictionary = _items[i]
@@ -10537,24 +11424,25 @@ func _tile_at_point(p: Vector2) -> int:
 
 # 逐帧驱动：棋盘行滑动缓动 + 呼吸描边相位
 func _process(delta: float) -> void:
+	# 麦克风调试（2026-11-01）：只有设置页在场时才刷新电平条与状态行。
+	# ★ 判据用 `_settings_root`（设置页控件树的根，只在这页存在）—— 不要用 `_page == PAGE_SETTINGS`：
+	#   切页那一帧 `_page` 已经变了、控件却还没销毁，反过来也一样，窄窗下会刷到死控件。
+	if _settings_root != null and is_instance_valid(_settings_root):
+		_tick_mic_debug(delta)
 	# ⚰️ 2026-10-12：这里原有本函数**开头**的两段"黑砖动画推进"（`_stone_anims` / `_stone_outs`
 	#   逐帧递减、到点擦除）—— 随黑砖族整族删除。
 	#   ⚠️ 那两段当年的纪律值得留住（**别丢**）："动画计时的推进只允许在 `_process` 里"，因为
 	#     散到绘制侧会变成"帧率越高动得越快"（本文件在背景旋转相位上记过同一笔账，守卫 S53）。
 	#     现在本函数仍是全部的"逐帧推进点"（棋盘滑动 + 呼吸相位），那条纪律没有被放宽。
 	# ★ 2026-10-09：这里原有「难度折叠进度 `_diff_t` 向 `_diff_target` 缓动」那一段 ——
-	#   难度三档平铺进「对战方式」行之后不再有出现/消失动画 ⇒ 折叠进度没有生产者，
-	#   整段删除（`_board_t` 那一段**保留**：它还驱动「切换棋盘 → 整行滑动」的时序）。
+	#   难度三档平铺进「对战方式」行之后不再有出现/消失动画 ⇒ 折叠进度没有生产者，整段删除。
+	#   （`_board_t` 那一段当时保留了下来，2026-11-06 也随棋盘下拉一起删了，见下。）
 	# ★ 2026-10-08：这里原有「联机折叠进度向 `_net_target` 缓动」那一段 —— 随 netmode 两瓣
 	#   整族删除（练习面板不再有联机入口，"从「线上」左侧长出"这件事不存在了）。
-	#   剩下两种折叠（难度 / 棋盘大小）照旧。
-	# 棋盘大小折叠进度向目标缓动（时长 = `BOARD_FOLD_TIME`）
-	if absf(_board_t - _board_target) > 0.001:
-		var step := delta / BOARD_FOLD_TIME
-		if _board_t < _board_target:
-			_board_t = minf(_board_t + step, _board_target)
-		else:
-			_board_t = maxf(_board_t - step, _board_target)
+	# ⚰️ 2026-11-06：这里原有两段 ——
+	#   ① 「棋盘大小折叠进度 `_board_t` 向 `_board_target` 缓动」（棋盘行改下拉后没有折叠）；
+	#   ② 「收回完成 → 换锚点 → 重新展开」（`_board_pending` 的落定链，同上）。
+	#   整族删除。本函数现在只剩"背景漂移/旋转相位 + 呼吸脉动 + 重绘"三件事。
 	# 主视觉背景棋盘缓慢漂移 + 缓慢旋转（相位只做时间累积，绘制侧自己取样）。
 	if _page == PAGE_MAIN:
 		# `_bg_frozen` 只给截图夹具用（见 `--shotspin=`）：钉住相位才能拍到最大摆角那一档。
@@ -10566,21 +11454,9 @@ func _process(delta: float) -> void:
 			#   而且 `_draw` 里改状态会让同一帧画两次得到不同的图（守卫 S53 钉着这一行）。
 			_bg_spin = fmod(_bg_spin + delta * BG_SPIN_RATE, 1.0)
 		queue_redraw()
-	# 收回完成后才换锚点：循环行里各棋盘的折叠簇锚点不同，必须先收回，
-	# 否则二级菜单会瞬移（旧实现把 _board_t 直接置 0，就是这个观感）。
-	if _board_pending >= 0 and _board_t <= 0.001:
-		_sel_board = _board_pending
-		_board_pending = -1
-		# ★★ 2026-10-16：原先这里还要 `_board_row_target = _board_target_pos(...)`（换卷绕槽位）
-		#   再由下面那段"整行横移"驱动重排。棋盘行改**静态平铺** ⇒ 没有滑行、没有槽位
-		#   ⇒ 换盘即时重排一次即可（少滑一段，但换盘本身仍然走
-		#   「先收回 `_board_target=0` → `_board_t` 缓到 0 → 换 `_sel_board` → 再展开」这条既有链）。
-		_layout_setup()
-	elif _board_target < 0.5 and _board_pending < 0 and absf(_board_t - _board_target) < 0.001:
-		# 收回完成 → 才把大小三档展开（顺序仍是「先收回、再展开」；`_board_t` 是这条链的时序闸）
-		_board_target = 1.0
 	# 呼吸描边持续脉动 → 每帧重绘（菜单场景开销可忽略）
 	_breath_t += delta
+	_pulse_menu_opts()       # 三个下拉的立体描边/投影跟同一条相位呼吸（见该函数的注）
 	queue_redraw()
 
 # ====== 绘制 ======
@@ -11108,25 +11984,27 @@ func _label_spacing_test() -> void:
 	print("[labeltest] ⓪ 夹具预置：彭罗斯+磐石命中·不存在名必落空 %s（命中=%s 落空=%s%s）" % [
 		"✓" if c0 else "✗", str(fix_hit), str(fix_miss),
 		"" if c0 else " · 瓷砖改名了？夹具的名字与 `_mode_label()` 那条链对不上"])
-	_board_t = 1.0
 	_layout_setup()
-	ok = _spread_test_group("boardsize", Vector2.RIGHT) and ok
-	# ★ 2026-10-09：这里原有 `_spread_test_group("diff", …)` —— 难度三档并入 `mode` 组，
+	# ★★ 2026-11-07：`_spread_test_group("boardsize"…)` / `("mode"…)` **两处调用改成新口径**。
+	#   被测对象变了：这两行现在都是原生下拉（`_size_opt` / `_mode_opt`），行内**没有瓷砖标签**
+	#   ⇒ 旧判据对空集合恒真（pairs 循环一次都不跑 = 没测，铁律 4）。
+	#   换成 `_opt_label_test()`：断"三个下拉的项文本非空且互不重复"—— 这才是下拉形态里
+	#   同族的坏法（空项 ⇒ 下拉显示一片空白；重复项 ⇒ 两个档看起来一样、选谁都分不清）。
+	ok = _opt_label_test("初始") and ok
+	# ⚰️ 2026-10-09：这里原有 `_spread_test_group("diff", …)` —— 难度三档并入 `mode` 组，
 	#   `diff` 组已不存在 ⇒ 对空集合的判据恒真 = 没测（铁律 4）。它要量的东西改由
-	#   `_spread_test_group("mode", …)` 覆盖（对战方式行现在 5 块，间距最容易挤）。
-	ok = _spread_test_group("mode", Vector2.ZERO) and ok
+	#   `--menutest` ⑭（对战方式逐档真选）覆盖。
 	# ★★ 2026-10-09：这里原有「场景1b 锚点标签避让」三条（`_anchor_avoid_test(...)`）
 	#   —— 随"文字放进按钮内部"整族删除（标签不再挂在按钮外 ⇒ 没有东西可避让；
 	#   判据若留着就是在量一个绘制端根本不用的位置，详见该函数处的删除说明）。
-	# 场景1c：爱因斯坦（4 个字，棋盘行里最长的标签）+ 它的**种类行**（帽子/海龟/幽灵）。
-	# 为什么单列一遍：① 棋盘行标签从 2~3 字变成 4 字，横向余量要重新量；
-	# ② 这一项的二级行不是尺寸行而是种类行（见 _set_page）—— 同 group 换含义后，
-	#    标签散布的几何是否仍然成立，必须拿它的实际标签量一次。
+	# 场景1c：爱因斯坦（4 个字，标签最长）+ 它的**种类行**（帽子/海龟/幽灵）。
+	# ★★ 2026-11-07：种类行也是下拉了 ⇒ 这里量的从"4 字标签的横向余量"变成
+	#   "种类三项的项文本非空/不重复"（横向余量由 `_board_static_test()` 的
+	#   「不出行带 + 居中 + 不越沿」覆盖，三个下拉逐档扫视口）。
 	_select_board(BOARD_HAT)
-	_set_page(PAGE_MAIN)              # 落定待切换项 + 按新棋盘重建二级行（种种类行）
-	_board_t = 1.0
+	_set_page(PAGE_MAIN)              # 落定待切换项 + 按新棋盘重建大小行的项（种类三项）
 	_layout_setup()
-	ok = _spread_test_group("boardsize", Vector2.RIGHT) and ok
+	ok = _opt_label_test("爱因斯坦") and ok
 	# 场景2：彭罗斯 + 线上。★ 2026-09-30 §24 第 5 步：这一场景原有**三条**断言，
 	#   `_spread_test_group("netmode", Vector2(-1,0))` / `_cross_group_gap("boardsize","netmode")` /
 	#   `_anchor_avoid_test("mode","线上", …)`，逐条记明处置（**一删 / 一换组 / 一保留**）：
@@ -11135,15 +12013,17 @@ func _label_spacing_test() -> void:
 	#       与"标记没人看 = 假绿"同族）。**删除**，改成下面那条元判据。
 	#     · `_cross_group_gap("boardsize", "mode")` **保留**：boardsize（棋盘行最右：随机/标准/加强）
 	#       ↔ mode（对战方式行最左）—— 对角的这两组仍可能斜向相撞。
+	#       ⚠️ **2026-11-07 起它也一并退役**：这两组都改成了原生下拉、`_items` 里 0 项
+	#       ⇒ 同一个"对空集合恒真"的坑。跨行相撞这件事在下拉形态里结构上不存在
+	#       （每行只有一个控件、尺寸由 `_place_menu_opt()` 按行带算），改由
+	#       `_board_static_test()` 的「纵向上不出行带」逐行逐视口量。
 	# ★★ 2026-10-08：`_anchor_avoid_test("mode","线上", …)` 与"组内项数恒为 2"那条元判据
 	#   随 netmode 两瓣整族删除（被测对象消失 ⇒ 判据同步摘，铁律 4 的同族纪律：
 	#   **对空集合的判据 = 没测**；留着它只会恒真）。
 
 	_set_page(PAGE_MAIN)
 	_auto_select("彭罗斯")
-	_board_t = 1.0
 	_layout_setup()
-	ok = _cross_group_gap("boardsize", "mode") and ok
 	# ★★ 2026-10-08：这里原有三条**联机方式两瓣**的几何断言，随两瓣整族删除：
 	#   `_spread_test_group("netmode", …)`（组内净间距）/ `_cross_group_gap("boardsize","netmode")`
 	#   （跨行净距）/ `_label_vs_panel_test()`（两瓣标签 × 左侧浮层面板）。被测对象都没了。
@@ -11492,6 +12372,14 @@ func _row_count_test() -> bool:
 	var row_groups := ["board", "boardsize", "mode", "net", "action"]
 	var present: Array[String] = []
 	for g in row_groups:
+		# ★★ 2026-11-06/07：`board` / `boardsize` / `mode` 三行**都改成了原生下拉** ⇒ 它们
+		#   不在 `_items` 里，所以"这一行在不在"要按**下拉在位**判 —— 仍然要数行：
+		#   行数进了 bandH / 半径预算，少一行人会立刻在窗高上显出"行整体变矮"。
+		#   ⚠️ `"net"` 仍是**负向哨兵**（见上面的 docstring）：它是下拉之外唯一非法的行名。
+		if g != "net" and g != "action":
+			if _menu_opt_of(g) != null and is_instance_valid(_menu_opt_of(g)):
+				present.append(g)
+			continue
 		for it in _items:
 			if it["group"] == g:
 				present.append(g)
@@ -11654,7 +12542,14 @@ func _row_align_test() -> bool:
 		return false
 	var w_want: float = float(_uni_box["hw"]) * 2.0
 	var h_want: float = float(_uni_box["hh"]) * 2.0
-	var rows := ["board", "boardsize", "mode", "action", "nav"]
+	# ★★ 2026-11-06：`board` 行**已无瓷砖**（改成原生下拉）⇒ 从分母里去掉。
+	#   ⚠️ 这条判据守的是"所有**瓷砖**一样大"，下拉不是瓷砖（尺寸由 `_place_menu_opt()`
+	#     按行带算，另由 `--labeltest` 里的 `_board_static_test()` 量落位）。
+	#     留着 board 会让它恒红（"未布局"），而那个红说的是"分母写错了"，不是"瓷砖不一样大"。
+	#   ★★ 2026-11-07：`boardsize` / `mode` 两行**也改成原生下拉** ⇒ 同样从分母里去掉。
+	#     现在瓷砖只剩两行：`action`（开始）与 `nav`（底栏四块）—— 口径照旧是
+	#     "同一份 `_uni_box` 出来的瓷砖必须一样大"，重写在两行上仍然成立。
+	var rows := ["action", "nav"]
 	var ok := true
 	var bad: Array[String] = []
 	var txt := ""
@@ -11737,92 +12632,69 @@ func _group_tile_size(g: String) -> Dictionary:
 		n += 1
 	return {"size": sz, "n": n, "uniform": uniform}
 
-## **棋盘行（静态平铺）**专项校验 —— 2026-10-16 取代原 `[循环行]` 段。
+## **棋盘行**专项校验 —— ★ 2026-11-06 口径重写（原为"静态平铺/等距/居中"那一族）。
 ##
-## 现在守五件事，**全部读真几何**（`_items` 的 `center` / `poly`），不引用任何解析模型：
-##   ① **启用项全部上屏**（块数 == `_board_enabled_kinds().size()`，且每块 `poly` 非空）；
-##   ② **每块只出现一次**（同 label 不重复）—— 这条正是"删掉滚动"的核心断言：
-##      轮播时代同一块会在屏幕上出现多次（槽位 `k ≡ 序号 mod N`），那正是用户要去掉的；
-##   ③ 相邻块**等距**（中心距 == `gap + 2·hw`，与统一尺寸真源 `_uni_box` 对账）；
-##   ④ 整行**水平居中**（左右留白相等）；
-##   ⑤ 两端**不出屏**（左顶点 ≥ 0、右顶点 ≤ 视口宽）。
-##
-## `vp` 给 `Vector2.ZERO` ⇒ 用当前视口；否则临时改 `size` 跑一遍布局再复原
-## （与 `_label_no_overlap_one()` 同一手法 —— 多档扫描是铁律 4 的要求）。
+## 起因：用户口令「选项太多了，就改成下拉列表选择」⇒ 棋盘行从"一排瓷砖"变成一个
+## `OptionButton`，于是原判据（块数 == 启用项数 / 每块只出现一次 / 相邻等距 / 整行居中 /
+## 两端不出屏）**全部失去被测物**（`_items` 里已经没有 board 组条目）。
+## **口径换了就改判据、不许删**（§127）⇒ 换成下拉自己的几何契约，仍全部读真数值：
+##   ① 下拉存在且选项数 == `MenuModel.board_options()`（8 项）；
+##   ② 下拉**落在「棋盘」行带里**（上沿 ≥ 行带上沿、下沿 ≤ 行带下沿）——
+##      摆错行带是"看着在，其实压住了下一行"的经典坏法，headless 也能量；
+##   ③ 横向**居中**（左右留白差 ≤ 1px，与瓷砖行同一个判据口径）；
+##   ④ 不超出可用宽度（左右各留 `ROW_EDGE_MARGIN`）。
 func _board_static_test(vp: Vector2 = Vector2.ZERO) -> bool:
 	var size_save: Vector2 = size
 	if vp != Vector2.ZERO:
 		size = vp
 		_layout_setup()
 	var ok := true
-	var items_b: Array[Dictionary] = []
-	for it in _items:
-		if str(it["group"]) == "board" and not bool(it["disabled"]):
-			items_b.append(it)
-	var nk: int = _board_enabled_kinds().size()
-	var laid := 0
-	var labels: Array[String] = []
-	var min_l := 1e9
-	var max_r := -1e9
-	for it2 in items_b:
-		var poly: PackedVector2Array = it2["poly"]
-		if poly.size() < 3:
+	var bad: Array[String] = []
+	# ★★ 2026-11-07：本函数从"只量棋盘下拉"扩到**三个下拉全量**（棋盘 / 大小·种类 / 对战方式）——
+	#   后两行也改成了原生下拉，而 `--menutest` ②b 数的是**瓷砖**，三行现在都是 0 块瓷砖
+	#   ⇒ 若这里只量棋盘，那两行的落位就**一条判据也没有**（"没测"与"测过且通过"必须长得不一样）。
+	#   口径对每个下拉完全一样：项数对得上 / 尺寸非零 / 纵向在自己那条行带内 / 水平居中 / 不越沿。
+	var want_n: Dictionary = {
+		"board": MenuModel.board_options().size(),
+		"boardsize": MenuModel.slots(_is_hat_eff()).size(),
+		"mode": _mode_opt_values().size(),
+	}
+	var detail: Array[String] = []
+	for g in ["board", "boardsize", "mode"]:
+		var opt: OptionButton = _menu_opt_of(g)
+		var row_bad: Array[String] = []
+		if opt == null or not is_instance_valid(opt):
+			row_bad.append("下拉不存在")
+			bad.append("%s：下拉不存在" % g)
+			detail.append("%s=缺" % g)
 			continue
-		laid += 1
-		labels.append(str(it2["label"]))
-		var bb := Rect2(poly[0], Vector2.ZERO)
-		for p in poly:
-			bb = bb.expand(p)
-		min_l = minf(min_l, bb.position.x)
-		max_r = maxf(max_r, bb.end.x)
-	# ① 全部上屏（注意同时要求 `items_b.size() == nk`：万一有启用盘**根本没建项**，
-	#    只数 poly 是数不出来的 —— 那是"少了一块"的另一种形态）
-	var all_laid: bool = laid == nk and items_b.size() == nk
-	# ② 每块只出现一次
-	var seen := {}
-	var dup := ""
-	for lb in labels:
-		if seen.has(lb):
-			dup = lb
-		seen[lb] = true
-	var once_ok: bool = dup == ""
-	# ③ 等距 + ④ 居中 + ⑤ 不出屏（③④ 只对"≥2 块且都布局"才有意义）
-	var pitch_ok := true
-	var center_ok := true
-	var pitch_txt := "—"
-	if laid >= 2:
-		var expect: float = float(_uni_box.get("gap", 0.0)) \
-			+ 2.0 * float(_uni_box.get("hw", 0.0))
-		for k2 in range(1, laid):
-			var step: float = Vector2(items_b[k2]["center"]).x \
-				- Vector2(items_b[k2 - 1]["center"]).x
-			if absf(step - expect) > 0.5:
-				pitch_ok = false
-		pitch_txt = "%.1f（期望 %.1f）" % [
-			Vector2(items_b[1]["center"]).x - Vector2(items_b[0]["center"]).x, expect]
-		center_ok = absf(min_l - (size.x - max_r)) <= 0.5
-	var inside_ok: bool = min_l >= -0.5 and max_r <= size.x + 0.5
-	var why := "✓"
-	if not all_laid:
-		why = "✗ 只有 %d/%d 块上屏（棋盘行会有空洞）" % [laid, nk]
-	elif not once_ok:
-		why = "✗ 同屏出现重复块「%s」（滚动没删干净）" % dup
-	elif not pitch_ok:
-		why = "✗ 相邻块不等距（%s）" % pitch_txt
-	elif not center_ok:
-		why = "✗ 整行没居中"
-	elif not inside_ok:
-		why = "✗ 有块出屏（x %.0f..%.0f / 视口宽 %.0f）" % [min_l, max_r, size.x]
-	if not (all_laid and once_ok and pitch_ok and center_ok and inside_ok):
-		ok = false
-	print("[labeltest] [棋盘行] 视口%.0f×%.0f 上屏=%d/%d 相邻块距=%s x=%.0f..%.0f %s" % [
-		size.x, size.y, laid, nk, pitch_txt, min_l, max_r, why])
-	# 复原：`vp` 为 ZERO 时 `size_save == size`，这一句是空操作（但必须无条件写，
-	# 否则将来有人加分支时会漏掉复原 —— `_label_no_overlap_test` 在这一处有先例）
-	size = size_save
+		if opt.item_count != int(want_n[g]):
+			row_bad.append("选项数 %d ≠ %d" % [opt.item_count, int(want_n[g])])
+		var r: Rect2 = Rect2(opt.position, opt.size)
+		var band: Rect2 = _row_bands.get(g, Rect2())
+		if r.size.x <= 0.0 or r.size.y <= 0.0:
+			row_bad.append("下拉尺寸为零 %s" % str(r.size))
+		if band.size.y <= 0.0:
+			row_bad.append("没记到行带（%s）" % g)
+		elif r.position.y < band.position.y - 0.5 or r.end.y > band.end.y + 0.5:
+			row_bad.append("纵向上出了行带：下拉 %s vs 行带 %s" % [
+					str(r.position.y), str(band.position.y)])
+		var l_gap: float = r.position.x
+		var r_gap: float = size.x - r.end.x
+		if absf(l_gap - r_gap) > 1.0:
+			row_bad.append("未水平居中：左 %.1f 右 %.1f" % [l_gap, r_gap])
+		if r.position.x < ROW_EDGE_MARGIN - 0.5 or r.end.x > size.x - ROW_EDGE_MARGIN + 0.5:
+			row_bad.append("超出可用宽度：%s ~ %s" % [str(r.position.x), str(r.end.x)])
+		for b in row_bad:
+			bad.append("%s：%s" % [g, b])
+		detail.append("%s 项%d %s %s" % [g, opt.item_count, str(opt.size), str(opt.position)])
+	print("[boardtest] 三个下拉落位（视口 %s）：%s ｜ %s" % [
+		str(size), " ".join(detail),
+		"通过 ✓" if bad.is_empty() else "失败 ✗（" + "；".join(bad) + "）"])
+	ok = bad.is_empty()
 	if vp != Vector2.ZERO:
+		size = size_save
 		_layout_setup()
-		queue_redraw()
 	return ok
 
 ## 当前排版下某瓷砖标签的绘制中心（展开完成态，fold_progress=1，供自检口径统一）。
@@ -12012,6 +12884,50 @@ func _panel_max_child_right(node: Node, best: float, best_name: String,
 			best_name = str(sub["who"])
 	return {"right": best, "who": best_name}
 
+## 三个下拉的**项文本**质量（2026-11-07 新立，接 `_spread_test_group` 的班）。
+##
+## ★★ 为什么必须换口径：棋盘 / 大小·种类 / 对战方式三行都从"一排瓷砖"变成"一个原生下拉"，
+##   行内不再有瓷砖标签 ⇒ 旧判据（组内标签净间距）对**空集合**恒真 —— 那是"没测"被印成
+##   "通过"（铁律 4，本工程老坑）。下拉形态里同族的坏法变成了这两种：
+##     · **空项**：`add_item("")` 或 `_mode_label()` 查不到 ⇒ 下拉里出现一条空白，
+##       玩家点它等于点了一个没有名字的档（真正的问题是它还能被选中）；
+##     · **重复项**：两个档取同一个名字 ⇒ 下拉里两条一模一样，选谁都分不清
+##       （2026-10-15b「疾风 = 人机 + 标记」那个坑在下拉形态下的对应面）。
+##   ⇒ 判据：三个下拉的项文本**非空、互不重复**，且项数与真源表一致。
+##   ★ 与 `_board_static_test()` 分工：那边量**几何**（行带内 / 居中 / 不越沿 / 项数），
+##     这里量**文本**。两条合起来 = 旧"标签散布"那条判据在新形态下的全部射程。
+func _opt_label_test(tag: String) -> bool:
+	var ok := true
+	var bad: Array[String] = []
+	var seen_txt: Array[String] = []
+	for g in ["board", "boardsize", "mode"]:
+		var opt: OptionButton = _menu_opt_of(g)
+		if opt == null or not is_instance_valid(opt):
+			ok = false
+			bad.append("%s 下拉不存在" % g)
+			continue
+		var want: int = {"board": MenuModel.board_options().size(),
+			"boardsize": MenuModel.slots(_is_hat_eff()).size(),
+			"mode": _mode_opt_values().size()}.get(g, -1)
+		if opt.item_count != want:
+			ok = false
+			bad.append("%s 项数 %d≠%d" % [g, opt.item_count, want])
+		var texts: Array[String] = []
+		for i in opt.item_count:
+			var t: String = opt.get_item_text(i)
+			if t.strip_edges() == "":
+				ok = false
+				bad.append("%s 第 %d 项文本为空" % [g, i])
+			if texts.has(t):
+				ok = false
+				bad.append("%s 项文本重复「%s」" % [g, t])
+			texts.append(t)
+		seen_txt.append("%s=%d项" % [g, opt.item_count])
+	print("[labeltest] [下拉项] %s：%s ｜ %s %s" % [
+		tag, " ".join(seen_txt), "非空且不重复" if ok else "有问题",
+		"✓" if ok else "✗ " + "；".join(bad.slice(0, 4))])
+	return ok
+
 func _spread_test_group(group: String, old_dir: Vector2) -> bool:
 	var f: Font = UITheme.body_font()
 	const FS := 22
@@ -12079,6 +12995,21 @@ func _cross_group_gap(g1: String, g2: String) -> bool:
 ##   由调用方（`_label_spacing_test`）当场断掉。CLI 那一侧仍只警告 —— `--select=` 是调试口，
 ##   写错名字不该让整轮截图失败（但会打一行 warning 供人读）。
 func _auto_select(label: String) -> bool:
+	# ★★ 2026-11-06/07：棋盘行改成原生下拉之后，`--select=彭罗斯` / `--select=彭罗斯随机`
+	#   这些**截图脚本的入口**不能失效（按名字认东西的地方会静默失效，§113）。
+	#   ⇒ 先在下拉里按**选项文本**找，找到就走它自己的信号（真实入口，与用户点选同一条链）。
+	#   ★ 2026-11-07：三个下拉（棋盘 / 大小·种类 / 对战方式）**全都要扫** —— 只扫棋盘的话
+	#     `--select=磐石` 会静默失效（磐石现在是对战方式下拉里的一项），而 `--labeltest` ⓪
+	#     正是拿它当"跨实现对拍"的参照物 ⇒ 静默失效会把整条夹具链带偏。
+	for g in ["board", "boardsize", "mode"]:
+		var opt: OptionButton = _menu_opt_of(g)
+		if opt == null or not is_instance_valid(opt):
+			continue
+		for oi in opt.item_count:
+			if opt.get_item_text(oi) == label:
+				opt.select(oi)
+				opt.item_selected.emit(oi)
+				return true
 	var hit := Callable()
 	for it in _items:
 		if it["label"] == label:
@@ -12087,7 +13018,7 @@ func _auto_select(label: String) -> bool:
 	if hit.is_valid():
 		hit.call()
 		return true
-	push_warning("--select=%s：未找到同名瓷砖" % label)
+	push_warning("--select=%s：未找到同名瓷砖/下拉项" % label)
 	return false
 
 ## 以 center 为「文字视觉中心」绘制一行文字（水平居中）。
@@ -12306,130 +13237,154 @@ func _on_steam_join_requested(lobby_id: int, friend_id: int) -> void:
 ##   ③ 开局没把种类推给 GameConfig → **菜单看着选了海龟，进游戏却是帽子随机盘**。
 ## 三件都是纯状态，headless 下可以精确断言，不用截图。
 func _einstein_kind_test() -> bool:
+	# 读「大小/种类」那一行下拉的**项文本**与**当前选中项文本**。
+	# ★★ 2026-11-07：这一行从"三瓣瓷砖"变成了一个原生下拉（`_size_opt`）
+	#   ⇒ 判据的两把尺子也换了：项文本 = 以前的三瓣标签，`selected` = 以前的"凹陷态"。
+	#   ⚠️ 别再写 `_boardsize_labels()` / `_selected_boardsize_label()`：那两个读的是
+	#     `_items` 里 group=="boardsize" 的瓷砖，这一行现在是 0 块瓷砖 ⇒ 恒返回空/空串，
+	#     判据会变成"拿空跟空比"（本工程老坑：对空集合的断言恒真 = 没测）。
+	var row_items := func() -> Array[String]:
+		var out: Array[String] = []
+		if _size_opt == null or not is_instance_valid(_size_opt):
+			return out
+		for i in _size_opt.item_count:
+			out.append(_size_opt.get_item_text(i))
+		return out
+	var row_sel := func() -> String:
+		if _size_opt == null or not is_instance_valid(_size_opt):
+			return ""
+		if _size_opt.selected < 0 or _size_opt.selected >= _size_opt.item_count:
+			return ""
+		return _size_opt.get_item_text(_size_opt.selected)
+
 	var ok := true
 	_set_page(PAGE_MAIN)
 
 	# 0) 这一槽位已改名为「爱因斯坦」（旧名「帽子」不再出现在棋盘行里）
-	var lbl: String = _board_label(BOARD_HAT)
+	var lbl: String = MenuModel.board_label(BOARD_HAT)
 	var c0: bool = lbl == "爱因斯坦"
 	ok = c0 and ok
 	print("[einsteintest] 0) 棋盘槽位名=%s（期望 爱因斯坦）%s" % [lbl, "✓" if c0 else "✗"])
 
-	# 1) 选爱因斯坦 → 二级行必须是种类三档，且顺序与 HAT_KINDS 一致
+	# 1) 选爱因斯坦 → 大小行的项必须是种类三项，且顺序与 HAT_KINDS 一致
+	var hat_lbl: Array[String] = []
+	for k in HAT_KINDS:
+		hat_lbl.append(String(k["label"]))
 	_select_board(BOARD_HAT)
 	_set_page(PAGE_MAIN)
-	var want: Array[String] = []
-	for k in HAT_KINDS:
-		want.append(String(k["label"]))
-	var labs: Array[String] = _boardsize_labels()
-	var c1: bool = labs == want
+	var labs: Array[String] = row_items.call()
+	var c1: bool = labs == hat_lbl
 	ok = c1 and ok
-	print("[einsteintest] 1) 爱因斯坦的二级行=%s（期望 %s）%s"
-		% [str(labs), str(want), "✓" if c1 else "✗ 尺寸行没换成种类行"])
+	print("[einsteintest] 1) 爱因斯坦时大小行的项=%s（期望 %s）%s"
+		% [str(labs), str(hat_lbl), "✓" if c1 else "✗ 尺寸行没换成种类行"])
 
-	# 2) 逐瓣点选：凹陷态 / 菜单状态 / 推给 GameConfig 的三件套必须一起对
+	# 2) 逐项真选（走控件自己的信号，与用户点选同一条链）：下拉选中项 / 菜单状态 /
+	#    推给 GameConfig 的三件套必须一起对。
+	# ★★ 2026-11-06 换口径：原先断言「尺寸必须被强制成随机档」（爱因斯坦只做随机盘）。
+	#   那条规则已删（三档统一 9×9/13×13/19×19，种类只换瓦片边长、与格数档正交）⇒
+	#   现在断言的是**相反的退化保证**：点种类**不许**动尺寸档。
+	#   ★ 先钉一个**非默认**档（ENHANCED），这样"被偷偷改回默认"也会被抓到
+	#     （钉 STANDARD 的话，写成常量 STANDARD 的实现照样绿）。
+	_sel_size = GameConfig.ENHANCED
 	for i in HAT_KINDS.size():
 		var kid: int = int(HAT_KINDS[i]["id"])
 		var klbl: String = String(HAT_KINDS[i]["label"])
-		_select_hatkind(kid)
+		if _size_opt != null and is_instance_valid(_size_opt):
+			_size_opt.item_selected.emit(i)     # 真选：走控件信号
 		_push_board_choice()
-		var stone_ok: bool = _selected_boardsize_label() == klbl
-		var state_ok: bool = _sel_hatkind == kid
-		# ★ 尺寸必须被强制成「随机」：爱因斯坦只做随机盘，否则它会继承用户上次在别的棋盘上选的档
+		var stone_ok: bool = row_sel.call() == klbl
+		var state_ok: bool = _sel_hatkind == kid and (not is_instance_valid(_size_opt) or _size_opt.selected == i)
 		var cfg_ok: bool = GameConfig.board_type == BOARD_HAT and GameConfig.hat_kind == kid \
-			and GameConfig.board_size == GameConfig.RANDOM
+			and GameConfig.board_size == GameConfig.ENHANCED
 		var ci: bool = stone_ok and state_ok and cfg_ok
 		ok = ci and ok
-		print("[einsteintest] 2) 点「%s」→ 凹陷态=%s(%s) 菜单状态(%s) | GameConfig 种类=%d 尺寸=随机(%s) %s"
-			% [klbl, _selected_boardsize_label(), "✓" if stone_ok else "✗",
+		print("[einsteintest] 2) 选「%s」→ 下拉回显=%s(%s) 菜单状态(%s) | GameConfig 种类=%d 尺寸=%d(应 %d，点种类不许改档) %s"
+			% [klbl, row_sel.call(), "✓" if stone_ok else "✗",
 				"✓" if state_ok else "✗", GameConfig.hat_kind,
-				"✓" if GameConfig.board_size == GameConfig.RANDOM else "✗",
+				GameConfig.board_size, GameConfig.ENHANCED,
 				"✓" if ci else "✗"])
 
-	# 2b) ★★ 真实点击路径（**不重建页面**）—— 用户实际踩到的就是这条，之前漏测。
-	#     `_set_page` 只在启动/切页时跑一次；用户点棋盘类型只走 `_refresh_selection()`，
-	#     所以「先在普通棋盘下把行建出来 → 再切到爱因斯坦 → 再点三瓣」必须单独验。
-	#     修好前实测：标签确实换成了帽子/海龟/幽灵，但回调还是 `_select_size`
-	#     → 点三瓣毫无反应（`_sel_hatkind` 永不变、凹陷态停在帽子）；
-	#     反向切回普通棋盘时槽位 1/2 还留着「海龟/幽灵」。
-	#     ⚠️ 自检同步跑在 `_ready` 里，`_process` 还没跑过 → 手工把折叠进度置成「已展开」的
-	#     稳态（= 用户看到的状态），否则 `_tile_at_point` 会被 `_board_t` 门槛挡下。
+	# 2b) ★★ 真实路径（**不重建页面**）—— 用户实际踩到的就是这条。
+	#     `_set_page` 只在启动/切页时跑一次；用户换棋盘只走 `_refresh_selection()`，
+	#     所以「先在普通棋盘下把行建出来 → 再切到爱因斯坦 → 再选种类」必须单独验。
+	#     修好前实测：行里确实换成了帽子/海龟/幽灵，但回调还是 `_select_size`
+	#     → 选三项毫无反应（`_sel_hatkind` 永不变）；反向切回普通棋盘时项还留着「海龟/幽灵」。
+	#     ★ 2026-11-07：形式从"点三瓣瓷砖"变成"选三个下拉项"，**要守的事情一字没变**：
+	#       换盘不重建页面时，项要重建、回调要跟着翻（`_rebuild_size_opt_items()` 的现场）。
 	_sel_board = BOARD_PENROSE
-	_board_pending = -1
+	_sel_board_random = false
 	_sel_hatkind = GameConfig.HAT_HAT
 	_sel_size = GameConfig.STANDARD
-	_set_page(PAGE_MAIN)                 # 行按「普通棋盘」建：回调是本文件里的大小三档
+	_set_page(PAGE_MAIN)                 # 行按「普通棋盘」建：项是尺寸三档
 	_select_board(BOARD_HAT)             # 只切棋盘（走 _refresh_selection，**不重建页面**）
-	_commit_board_pending()              # 切换落定（等价于收回 + 滑行 + 展开跑完）
-	_board_t = 1.0
-	_board_target = 1.0
 	_layout_setup()
-	var want_h: Array[String] = []
-	for k in HAT_KINDS:
-		want_h.append(String(k["label"]))
-	var lanes_h: Array[String] = _boardsize_labels()
-	var c2b: bool = lanes_h == want_h
+	var lanes_h: Array[String] = row_items.call()
+	var c2b: bool = lanes_h == hat_lbl
 	var click_log: Array[String] = []
 	for i in HAT_KINDS.size():
 		var kid2: int = int(HAT_KINDS[i]["id"])
 		var klbl2: String = String(HAT_KINDS[i]["label"])
-		if not _click_boardsize_slot(kid2):
+		if _size_opt == null or not is_instance_valid(_size_opt):
 			c2b = false
-			click_log.append("%s:点不到" % klbl2)
+			click_log.append("%s:下拉不在" % klbl2)
 			continue
-		var step_ok: bool = _sel_hatkind == kid2 and _selected_boardsize_label() == klbl2
+		_size_opt.item_selected.emit(i)
+		var step_ok: bool = _sel_hatkind == kid2 and row_sel.call() == klbl2
 		if not step_ok:
 			c2b = false
-		click_log.append("%s→凹陷态%s" % [klbl2, _selected_boardsize_label()])
-	# 反向：切回普通棋盘（同样**不重建页面**）→ 三档标签不许残留「海龟/幽灵」，
-	# 且点中间那槽要真的选到「标准」（同一条真实点击链）。
+		click_log.append("%s→回显%s" % [klbl2, row_sel.call()])
+	# 反向：切回普通棋盘（同样**不重建页面**）→ 项不许残留「海龟/幽灵」，
+	# 且选中间那项要真的把 `_sel_size` 落成 13×13。
 	_select_board(BOARD_PENROSE)
-	_commit_board_pending()
-	_board_t = 1.0
-	_board_target = 1.0
 	_layout_setup()
-	var want_s: Array[String] = ["随机", "标准", "加强"]
-	var lanes_s: Array[String] = _boardsize_labels()
+	# ★ 2026-11-06：三档名改成对标值 9×9/13×13/19×19（不再是 随机/标准/加强）
+	var want_s: Array[String] = ["9×9", "13×13", "19×19"]
+	var lanes_s: Array[String] = row_items.call()
 	var back_ok: bool = lanes_s == want_s
-	if back_ok:
-		back_ok = _click_boardsize_slot(GameConfig.STANDARD) and _sel_size == GameConfig.STANDARD and _selected_boardsize_label() == "标准"
+	if back_ok and _size_opt != null and is_instance_valid(_size_opt):
+		var mid: int = MenuModel.size_slots().find(GameConfig.STANDARD)
+		_size_opt.item_selected.emit(mid)
+		back_ok = _sel_size == GameConfig.STANDARD and row_sel.call() == "13×13"
 	c2b = c2b and back_ok
 	ok = c2b and ok
-	print("[einsteintest] 2b) 真实点击路径（不重建页面）：爱因斯坦二级行=%s 逐瓣点击=%s | 切回彭罗斯二级行=%s 点「标准」后凹陷态=%s %s"
-		% [str(lanes_h), str(click_log), str(lanes_s), _selected_boardsize_label(),
+	print("[einsteintest] 2b) 真实路径（不重建页面）：爱因斯坦时项=%s 逐项选择=%s | 切回彭罗斯项=%s 选「13×13」后回显=%s %s"
+		% [str(lanes_h), str(click_log), str(lanes_s), row_sel.call(),
 			"✓" if c2b else "✗ 行语义与回调不同步"])
-	# 3) 切回普通棋盘：二级行要换回大小三档，且选中源换回 _sel_size（不是 _sel_hatkind）
-	_sel_size = GameConfig.ENHANCED           # 故意停在「加强」，看它能不能被正确回显
+	# 3) 切回普通棋盘：项要换回尺寸三档，且选中源换回 `_sel_size`（不是 `_sel_hatkind`）
+	_sel_size = GameConfig.ENHANCED           # 故意停在「19×19」，看它能不能被正确回显
 	_select_board(BOARD_PENROSE)
 	_set_page(PAGE_MAIN)
-	var want2: Array[String] = ["随机", "标准", "加强"]
-	var labs2: Array[String] = _boardsize_labels()
-	var sel2: String = _selected_boardsize_label()
+	var labs2: Array[String] = row_items.call()
+	var sel2: String = row_sel.call()
 	_push_board_choice()
-	var c3: bool = labs2 == want2 and sel2 == "加强" \
+	var c3: bool = labs2 == want_s and sel2 == "19×19" \
 		and GameConfig.board_size == GameConfig.ENHANCED and GameConfig.board_type == BOARD_PENROSE
 	ok = c3 and ok
-	print("[einsteintest] 3) 切回彭罗斯：二级行=%s 凹陷态=%s | 推给 GameConfig 的尺寸=%d（应仍是加强）%s"
-		% [str(labs2), sel2, GameConfig.board_size, "✓" if c3 else "✗"])
+	print("[einsteintest] 3) 切回彭罗斯：项=%s 回显=%s | 推给 GameConfig 的尺寸=%d（应仍是 19×19=%d）%s"
+		% [str(labs2), sel2, GameConfig.board_size, GameConfig.ENHANCED, "✓" if c3 else "✗"])
 
-	# 4) 阴性对照：把 _sel_hatkind 设成表里没有的 id（模拟「表与状态不同步」）
-	#    → 标签必须**回退成「帽子」而不是空串**（空串会让瓷砖标签整块消失，且不容易被发现），
-	#      且**没有任何一瓣被标成选中**（证明选中态是按 id 精确匹配，不是"反正有 3 瓣就黑一块"）。
-	#    另外 game.gd 侧对未知种类也必须安全降级成帽子几何（`_hat_kind_lengths()` 的 `_` 分支）。
+	# 4) 阴性对照：把 `_sel_hatkind` 设成表里没有的 id（模拟「表与状态不同步」）
+	#    → 项文本必须**仍然三项非空**（空串会让下拉出现一条空白），
+	#      且**选中项必须退回第 0 项（帽子）而不是 -1**（`_set_size_opt_selected()` 的
+	#      `find() < 0 ⇒ idx = 0` 兜底）；名字侧 `_hat_kind_label(99)` 也必须退回「帽子」。
+	#    ⚠️ 原来这里断的是"没有任何一瓣被标成选中"，下拉形态下等价物是"选中项不越界"：
+	#      下拉**永远**有一项被选中（`selected` 不会为 -1 之外的"无选中"），所以真正会坏的是
+	#      "选中项指向一个不存在的项" —— 那会让 `get_item_text()` 返回空串。
 	_sel_hatkind = 99
 	_select_board(BOARD_HAT)
 	_set_page(PAGE_MAIN)
-	var labs_bad: Array[String] = _boardsize_labels()
+	var labs_bad: Array[String] = row_items.call()
 	var all_named: bool = labs_bad.size() == HAT_KINDS.size()
-	for s in labs_bad:
-		if s == "":
+	for t in labs_bad:
+		if t == "":
 			all_named = false
-	var no_stone: bool = _selected_boardsize_label() == ""
+	var sel_idx_ok: bool = _size_opt != null and is_instance_valid(_size_opt) \
+		and _size_opt.selected == 0 and row_sel.call() == String(HAT_KINDS[0]["label"])
 	var fallback_ok: bool = _hat_kind_label(99) == "帽子"
-	var ctl: bool = all_named and no_stone and fallback_ok
+	var ctl: bool = all_named and sel_idx_ok and fallback_ok
 	ok = ctl and ok
-	print("[einsteintest] 4) 阴性对照（种类 id=99 不在表里）：标签=%s 无空串(%s) 无一瓣选中(%s) 名字回退=%s(%s) %s"
-		% [str(labs_bad), "✓" if all_named else "✗", "✓" if no_stone else "✗",
+	print("[einsteintest] 4) 阴性对照（种类 id=99 不在表里）：项=%s 无空串(%s) 选中退回第0项(%s) 名字回退=%s(%s) %s"
+		% [str(labs_bad), "✓" if all_named else "✗", "✓" if sel_idx_ok else "✗",
 			_hat_kind_label(99), "✓" if fallback_ok else "✗", "✓" if ctl else "✗"])
 
 	_sel_hatkind = GameConfig.HAT_HAT       # 复原，别把自检里的坏状态留给后续
@@ -12456,16 +13411,20 @@ func _last_match_test() -> bool:
 	#      读回来一样都是 0 ⇒ 判据瞎（§106「有效分母」在字段级的样子）。
 	#    ★ 2026-10-15b 并列化：**字段格式一个字节都没变**（本段就是这条的守卫）——
 	#      `mode=VS_AI` + `xg=1` 仍是"上一局选了疾风"的唯一写法，哨兵 100 不许进文件。
+	#    ★★ 2026-11-06 加第 7 个 `rand_shape`（棋盘「XX随机」）—— 同样**必须非零**：
+	#      给 0 的话"写进去了"与"压根没写"读回来一样都是 0 ⇒ 判据瞎（字段级的 §106）。
 	var want := {
 		"board": BOARD_SNOWFLAKE, "size": GameConfig.ENHANCED,
 		"hat_kind": GameConfig.HAT_SPECTRE, "diff": DIFF_HARD, "mode": MODE_VS_AI, "xg": 1,
+		"rand_shape": 1,
 	}
 	# ★ 六个参数全部显式 `int(...)`：`want` 是 Dictionary ⇒ 读出来是 Variant，
 	#   不包的话静态检查会把它当 `String` 而报
 	#   「Invalid argument for save_last_match(): argument 6 should be int but is String」
 	#   （2026-10-14 实测：`--lastmatchtest` 直接 Parse Error ⇒ exit=124 卡到超时）。
 	GameConfig.save_last_match(int(want["board"]), int(want["size"]), int(want["hat_kind"]),
-		int(want["diff"]), int(want["mode"]), int(want["xg"]), TEST_PATH)
+		int(want["diff"]), int(want["mode"]), int(want["xg"]),
+		int(want["rand_shape"]), TEST_PATH)
 	var back: Dictionary = GameConfig.load_last_match(TEST_PATH)
 	var same: bool = back.size() == want.size()
 	for k in want:
@@ -12507,7 +13466,7 @@ func _last_match_test() -> bool:
 	#    这样"只应用了一半"也会被抓到（只比其中一个字段是抓不住的 —— 那种断言等于没写）。
 	#    a) 棋盘 id 已不存在（-1 是「敬请期待」占位 id）→ 整份作废，四项状态一个都不许动
 	_sel_board = BOARD_PENROSE
-	_sel_size = GameConfig.RANDOM
+	_sel_size = GameConfig.SMALL          # 哨兵档（三档改号后 0 不再是尺寸档，见 `_migrate_size()`）
 	_sel_hatkind = GameConfig.HAT_HAT
 	# ★ 2026-10-15b：哨兵改成 `MODE_XGAI` —— 并列化之后它就是"第四档"这个**最难被误改的值**
 	#   （坏记录里写的是 MODE_VS_AI，若"作废"那道闸漏了，`_sel_mode` 会被写成 VS_AI ⇒ 当场红）。
@@ -12515,22 +13474,28 @@ func _last_match_test() -> bool:
 	_sel_mode = MODE_XGAI
 	var rejected: bool = not _apply_last_match({"board": -1, "size": GameConfig.ENHANCED,
 		"hat_kind": GameConfig.HAT_TURTLE, "diff": DIFF_HARD, "mode": MODE_VS_AI})
-	var untouched: bool = _sel_board == BOARD_PENROSE and _sel_size == GameConfig.RANDOM \
+	var untouched: bool = _sel_board == BOARD_PENROSE and _sel_size == GameConfig.SMALL \
 		and _sel_hatkind == GameConfig.HAT_HAT and _sel_mode == MODE_XGAI
 	var c3a: bool = rejected and untouched
 	ok = c3a and ok
 	print("[lastmatchtest] 3a) 棋盘 id 已下线：拒绝=%s 四项状态全未动=%s %s" % [
 		str(rejected), "✓" if untouched else ("✗ 状态被改动"), "✓" if c3a else "✗"])
-	#    b) 越界脏数据 → 夹回合法区间（大小档→加强、种类→幽灵、对战方式→本地），不是照抄
+	#    b) 越界脏数据 → 换成合法值（大小档→默认 13×13、种类→幽灵、对战方式→本地），不是照抄
 	#       ⚠️ 脏记录里仍带 `"diff": 99`：夹取那一半在 `MenuModel.restore_state()` 里照旧要做
 	#          （手机菜单还有难度行、被 `--mtest` 钉着），而**桌面菜单不采纳它**。
 	#          本条顺带断"一个越界的 `diff` 不会把整份记录丢掉"。
 	#    ★ 2026-10-15b：这份脏记录**故意不带 `xg`** ⇒ 顺带钉住"旧格式/缺字段的纪录
 	#      **不会被误认成疾风档**"（铁律 §111：新式必须能在旧工况下退化成旧式）。
 	#      期望 `MODE_VS_AI`（记录里 `mode=1`、无 `xg` ⇒ 磐石，**不是**疾风）。
+	#    ★★ 2026-11-06 改口径：三档枚举改成 3/1/2（数值不再单调）⇒ 「夹取到最大档」这个动作
+	#      在数值上已经没有意义，`_migrate_size()` 改成**显式查表**、越界一律退默认档。
+	#      于是本条守的是"**脏值不许被照抄**"：99 必须被换成一个合法枚举。
 	var clamped: bool = _apply_last_match({"board": BOARD_KITE, "size": 99,
 		"hat_kind": 99, "diff": 99, "mode": 1})
-	var c3b: bool = clamped and _sel_board == BOARD_KITE and _sel_size == GameConfig.ENHANCED \
+	var sz_cl: int = _sel_size
+	var sz_legal: bool = sz_cl == GameConfig.SMALL or sz_cl == GameConfig.STANDARD \
+		or sz_cl == GameConfig.ENHANCED
+	var c3b: bool = clamped and _sel_board == BOARD_KITE and sz_legal and sz_cl != 99 \
 		and _sel_hatkind == GameConfig.HAT_SPECTRE and _sel_mode == MODE_VS_AI
 	ok = c3b and ok
 	print("[lastmatchtest] 3b) 越界脏数据被夹回 %s（大小=%d 种类=%d 对战方式=%d · 缺 xg ⇒ 磐石非疾风）" % [
@@ -12585,7 +13550,7 @@ func _last_match_test() -> bool:
 	# ★ 显式传 `xg=0`：`xg` 插在 `path` 之前（有默认值），**传了路径的调用点必须补这一位**，
 	#   否则路径字符串落到 `xg: int` 上 ⇒ Parse Error（本轮实测就是这么栽的第二次）。
 	GameConfig.save_last_match(BOARD_KITE, GameConfig.STANDARD, GameConfig.HAT_HAT,
-		DIFF_HARD, MODE_LOCAL, 0, GameConfig.LAST_MATCH_PATH)
+		DIFF_HARD, MODE_LOCAL, 0, 0, GameConfig.LAST_MATCH_PATH)
 	#     ★★ 判据变量 `lm_intact` 只在**还原之前**判一次：**判据不许被自己的善后动作抹平**。
 	#       首版就踩了 —— 还原之后又比了一次、把结果写回同一个变量 ⇒ 判据恒真，
 	#       阴性对照（M33 拆掉闸）当场是**绿的**（"看起来有判据、其实它永远不会红"）。
@@ -12841,11 +13806,14 @@ func _join_snap_delta(b: Dictionary) -> String:
 ##   直接读会在这两种盘上取到错的几何（背景画出来的与实际开局不是一张盘）。
 ##   而这层换算**只能有一处**，否则绘制与判据各算一次，早晚分家（同"两处真相"）。
 func _sync_menu_bg() -> void:
-	# ★ 用 `_eff_board()`（**用户看到的**那块）而不是 `_sel_board` ——
+	# ★ 用 `_sel_board`（**用户看到的**那块）而不是 `_sel_board` ——
 	#   `_select_board()` 走待切换机制：点一下就设 `_board_pending` 并收回动画，
 	#   `_sel_board` 要到"开始/切页"才落定。若背景跟 `_sel_board`，
 	#   症状是"点了新棋盘、背景还是旧盘"—— 而那**恰恰是用户最想看到它变**的一刻。
-	_menu_bg_board = _eff_board()
+	_menu_bg_board = _sel_board
+	# ★★ 2026-11-06：随机形状（「XX随机」）**不影响背景** —— 背景画的是该盘的**固定几何**
+	#   密铺（氛围），而随机形状要等进局时按种子现算。两侧都是同一张盘型，所以不需要分支。
+	#   ⚠️ 别在这里抽种子"预览"：`_bg_ensure()` 每次重算都换一张盘，背景会闪。
 	# 槽位 0 的语义随棋盘变（大小 vs 种类）；爱因斯坦下"随机档"不存在，
 	# 背景统一按"该盘能生成的最大那档"画 —— 背景是氛围，不需要与实际局完全同尺寸。
 	if _is_hat_eff():
@@ -13101,7 +14069,6 @@ func _start_config_plan() -> Dictionary:
 
 # 由主菜单开始：按当前选择写入 GameConfig
 func _start_from_setup() -> void:
-	_commit_board_pending()          # 收回动画途中点「开始」：先把待切换的棋盘落定，别用旧锚点开局
 	# ★ 2026-10-15b：三件下落全部由上面那个纯函数给出（同一个东西，两边不可能分叉）
 	var plan: Dictionary = _start_config_plan()
 	GameConfig.mode = int(plan["mode"])
@@ -13164,17 +14131,15 @@ func _notification(what: int) -> void:
 		queue_redraw()
 
 func _capture_and_quit() -> void:
-	# ★ 等动画收尾再截（原来固定等 0.5s）：切棋盘要走「收回 → 整行滑行 → 再展开」三步，
-	#   最长约 1.6s，0.5s 截到的是**动画中途**（瓷砖半透明、折叠簇还叠在一起）。
-	#   实测 2026-09-19：`--select=爱因斯坦` 截出来的三瓣是灰的、还压在棋盘块上，
-	#   被当成「改不了选项」的旁证，白查一轮 —— 截图本身也得等状态稳定。
-	#   判据 = 已经处于「展开稳态」：切换落定 + 目标=1 + 进度=1 + 滑行完成。
-	#   ⚠️ 千万别只写 `_board_t == _board_target`：收回阶段两者都是 0，会被误判成「已收敛」
-	#   （实测第一次就写成那样，截出来的还是收回态、三瓣一个都看不到），必须钉住 **≥0.999**。
-	#   最多等 5 秒，绝不无限等。
+	# ★★ 2026-11-06：原先这里等的是"棋盘折叠/滑行动画收尾"（`_board_pending`/`_board_t`）。
+	#   棋盘行改**下拉**之后那条链不存在了 ⇒ 改为等两件**仍然会晚到**的事：
+	#     ① 页面确实是主菜单（`--shotpage=` 切页时页面重建要几帧）；
+	#     ② 下拉已经建好且选中项与状态一致（`_set_page()` 建、`_layout_setup()` 摆位）。
+	#   多余的时间只保留一个短的固定余量 —— 截图夹具**等的是状态，不是时长**。
 	var waited := 0.0
 	while waited < 5.0:
-		if _board_pending < 0 and _board_target >= 0.999 and _board_t >= 0.999:
+		if _page == PAGE_MAIN and _board_opt != null and is_instance_valid(_board_opt) \
+				and _board_opt.selected == MenuModel.board_option_index(_sel_board, _sel_board_random):
 			break
 		await get_tree().create_timer(0.05).timeout
 		waited += 0.05

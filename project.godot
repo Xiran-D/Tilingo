@@ -11,9 +11,13 @@ config_version=5
 [application]
 
 config/name="瓷砖围棋"
-config/version="0.8"
+config/version="0.9.0"
 run/main_scene="res://menu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
+
+[audio]
+
+driver/enable_input=true
 
 [autoload]
 
