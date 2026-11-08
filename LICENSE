@@ -19,11 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Third-party assets shipped with this project keep their own licenses:
-
-- art/font/LXGWWenKai-*.subset.ttf — 霞鹜文楷 LXGW WenKai, SIL Open Font
-  License 1.1. See art/font/LXGWWenKai-OFL.txt and art/font/README.md.
-- Godot Engine runtime is licensed under the MIT License (see godotengine.org).

@@ -165,3 +165,5 @@ Code is MIT — see [LICENSE](LICENSE).
 Bundled font **LXGW WenKai**: SIL Open Font License 1.1, see `art/font/README.md`.
 
 **Godot Engine** 4.7.2: MIT.
+
+Full third-party notices: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

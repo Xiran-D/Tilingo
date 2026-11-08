@@ -72,13 +72,24 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          Compress-Archive -Path "$env:OUT_EXE" -DestinationPath "$env:ZIP_NAME" -Force
+          # ★ MIT 要求随二进制一并分发版权与许可声明 ⇒ LICENSE 等文本必须进 zip。
+          #   Godot 只把资源打进 pck，.md / LICENSE 不会被自动带上，所以在这里显式拷。
+          New-Item -ItemType Directory -Path stage -Force | Out-Null
+          Copy-Item "$env:OUT_EXE" stage/
+          Copy-Item LICENSE, README.md, README.en.md, THIRD-PARTY-NOTICES.md stage/
+          Compress-Archive -Path "stage/*" -DestinationPath "$env:ZIP_NAME" -Force
           Get-Item $env:ZIP_NAME | Format-List Name, Length
+          # 自证：解压回来核一遍，防止 -Path 写错把文件漏在外面
+          Expand-Archive -Path "$env:ZIP_NAME" -DestinationPath check -Force
+          Get-ChildItem check | Format-Table Name, Length
+          foreach ($f in @($env:OUT_EXE.Split('/')[-1], 'LICENSE', 'THIRD-PARTY-NOTICES.md')) {
+            if (-not (Test-Path "check/$f")) { Write-Error "zip 缺少 $f"; exit 1 }
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TileGo-windows-x64
+          name: Tilingo-windows-x64
           path: ${{ env.ZIP_NAME }}
           if-no-files-found: error
 

@@ -165,3 +165,5 @@ ai/                     野马权重与 golden 基准
 随包字体 **霞鹜文楷 LXGW WenKai**：SIL Open Font License 1.1，详见 `art/font/README.md`。
 
 引擎 **Godot Engine** 4.7.2：MIT。
+
+第三方资产的完整声明见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
