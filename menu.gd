@@ -6585,9 +6585,17 @@ func _menu_layout_self_test() -> void:
 	#   ★★ 期望值**不另写一份 page↔标签 映射表**（那才是"判据自己注入被测量"）：
 	#   独立于实现的期望是 —— **亮着的那一块，点它不该换面板**（它就是这个面板的入口）。
 	#   两向都量（在练习 / 棋谱 / 设置三个面板各问一次），否则"恒 sel=true"也能过。
+	# ★ 精简版底栏只有「练习 / 设置」两瓣（棋谱 / 对弈整块不产出）⇒ ⑤b / ⑥d / ⑥e 的
+	#   遍历范围与样本数**都读这两行**，别在每条判据里各写一遍 `if GameConfig.lite`
+	#   （改一处漏三处；漏掉的那条只会表现为"代码没动过的判据突然红了"）。
+	var nav_pages: Array[int] = [PAGE_MAIN, PAGE_RECORDS, PAGE_SETTINGS]
+	var nav_count: int = 4
+	if GameConfig.lite:
+		nav_pages = [PAGE_MAIN, PAGE_SETTINGS]
+		nav_count = 2
 	var sel_bad: Array[String] = []
 	var sel_samples: int = 0
-	for pgs in [PAGE_MAIN, PAGE_RECORDS, PAGE_SETTINGS]:
+	for pgs in nav_pages:
 		_set_page(pgs)
 		sel_samples += 1
 		var on: Array[int] = _nav_lit_indices()    # 量法唯一真源（见该函数）
@@ -6602,7 +6610,7 @@ func _menu_layout_self_test() -> void:
 				pgs, str(_items[lit]["label"]), _page])
 		_set_page(pgs)
 	_set_page(PAGE_MAIN)
-	var c5b: bool = sel_bad.is_empty() and sel_samples == 3
+	var c5b: bool = sel_bad.is_empty() and sel_samples == nav_pages.size()
 	checks.append(["⑤b 底栏恰好一块亮着｜且指出当前面板", c5b,
 		"样本 %d 个面板 · 异常 %s" % [sel_samples, str(sel_bad)]])
 
@@ -6721,8 +6729,8 @@ func _menu_layout_self_test() -> void:
 	for pf in pages_all:
 		_set_page(pf)
 		var fit: Array[Dictionary] = _footer_row_items()
-		if fit.size() != 4:
-			foot_bad.append("第%d面板底栏 %d 块（应 4）" % [pf, fit.size()])
+		if fit.size() != nav_count:
+			foot_bad.append("第%d面板底栏 %d 块（应 %d）" % [pf, fit.size(), nav_count])
 			continue
 		for itf in fit:
 			var lbl: String = str(itf["label"])
@@ -6746,7 +6754,7 @@ func _menu_layout_self_test() -> void:
 					or absf(rbb.size.y - bbf.size.y) > 0.5:
 				foot_bad.append("「%s」在第%d面板位置变了（心 %s vs %s）" % [
 					lbl, pf, str(itf["center"]), str(ref["c"])])
-	var c6d: bool = foot_bad.is_empty() and foot_samples == pages_all.size() * 4
+	var c6d: bool = foot_bad.is_empty() and foot_samples == pages_all.size() * nav_count
 	checks.append(["⑥d 底栏四块在四个面板上同位置同标签", c6d,
 		"样本 %d 块 · 异常 %s" % [foot_samples, str(foot_bad.slice(0, 3))]])
 
@@ -6760,7 +6768,7 @@ func _menu_layout_self_test() -> void:
 	#     面板的入口）；② **点别的块必须真的离开**（否则"接了个空回调"也能过）。
 	var sw_bad: Array[String] = []
 	var sw_seen: int = 0
-	for ps in pages_all:
+	for ps in nav_pages:
 		_set_page(ps)
 		var lit_i: int = -1
 		for i_s2 in _items.size():
@@ -6788,7 +6796,7 @@ func _menu_layout_self_test() -> void:
 		if not moved:
 			sw_bad.append("第%d面板点别的底栏块没有任何反应" % ps)
 	_set_page(PAGE_MAIN)
-	var c6e: bool = sw_bad.is_empty() and sw_seen == pages_all.size()
+	var c6e: bool = sw_bad.is_empty() and sw_seen == nav_pages.size()
 	checks.append(["⑥e 点底栏真的切面板｜点自己不动·点别的必动", c6e,
 		"样本 %d 面板 · 异常 %s" % [sw_seen, str(sw_bad)]])
 
@@ -7283,7 +7291,10 @@ func _menu_layout_self_test() -> void:
 	GameConfig.apply_preset(GameConfig.DEFAULT_PRESET)
 	_apply_appearance()
 	# ⚠️ 样本数必须达标：空集会让上面两个循环**一次都不进** ⇒ 判据恒真（铁律 13⑨）
-	var c10k: bool = k_bad.is_empty() and k_seen >= 2 and k_apply >= 2 and n_fallback == 2
+	#   ★ 主题数按**实际加载到的**算（精简版只有 1 套）：写死 `>= 2` 会让精简版恒红，
+	#     而写死 `>= 1` 又会让完整版"少加载了几套主题"静默通过 —— 两个都不对。
+	var want_k_apply: int = GameConfig.preset_names().size()
+	var c10k: bool = k_bad.is_empty() and k_seen >= 2 and k_apply == want_k_apply and n_fallback == 2
 	# ⚠️ `k_fb` 是**要印出来的**：它数的是"`pal["ink"]` 自身对瓷砖底不够、真走了兜底"的
 	#   样本数 —— 兜底是**保险**不是常态，常态下它应当是 0；哪天上到两位数，说明
 	#   `pal["ink"]`（对着 `pal["fill"]` 拟合的那一档）与瓷砖真实底色的差距变大了，
